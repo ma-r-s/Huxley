@@ -1534,6 +1534,520 @@
       "pitch": "Cuentos del campo mexicano, de gente pobre, violencia y tierras secas en los años de la Revolución.",
       "verified": "2026-10-14",
       "chapters_checked": false
+    },
+    {
+      "title": "Bestiario",
+      "author": "Julio Cortázar",
+      "narrator": "Leandro Schnitman",
+      "uri": "spotify:show:4xbRGIbghTnHgjuBqcDQhW",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "fantástico",
+        "animales",
+        "argentina"
+      ],
+      "pitch": "Ocho cuentos en los que lo cotidiano se vuelve extraño, con animales reales e imaginarios.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Ficciones",
+      "author": "Jorge Luis Borges",
+      "narrator": "Gerardo Prat",
+      "uri": "spotify:show:5il8wh2CjEkIf126gHpIOo",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "fantástico",
+        "filosofía",
+        "argentina"
+      ],
+      "pitch": "Cuentos de Borges sobre laberintos, bibliotecas infinitas, espejos y mundos imaginarios.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El Aleph",
+      "author": "Jorge Luis Borges",
+      "narrator": "Gerardo Prat",
+      "uri": "spotify:show:78YnwEFjVn37otIloyX16d",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "fantástico",
+        "filosofía",
+        "argentina"
+      ],
+      "pitch": "Cuentos de Borges sobre el infinito, la inmortalidad y el destino, entre lo fantástico y lo policial.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Cuentos de la selva",
+      "author": "Horacio Quiroga",
+      "narrator": "Varios narradores",
+      "uri": "spotify:show:22DtQSPTA9MDNLm653v6Vu",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "animales",
+        "naturaleza",
+        "infancia"
+      ],
+      "pitch": "Cuentos de animales de la selva, como flamencos, tortugas y coatíes, pensados para los niños.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Cuentos de amor, de locura y de muerte",
+      "author": "Horacio Quiroga",
+      "narrator": "Martín de Renzo",
+      "uri": "spotify:show:1cHEUP2JFjUft6OJJcurIo",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "amor",
+        "naturaleza"
+      ],
+      "pitch": "Cuentos de Quiroga sobre la pasión, la locura y la muerte, muchos de ellos ambientados en la selva.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Las mil y una noches",
+      "author": "Anónimo",
+      "narrator": "Oscar Chamorro",
+      "uri": "spotify:show:0EwJcGA69EXEVub8JDbcuK",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "fantástico",
+        "amor"
+      ],
+      "pitch": "Primer tomo de los cuentos que Sherezade narra cada noche al sultán para salvar su vida.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Fábulas de Esopo",
+      "author": "Esopo",
+      "narrator": "Luis Ignacio González",
+      "uri": "spotify:show:7GZ5mc7rgJwLxPF16yemcW",
+      "language": "es",
+      "category": "cuentos",
+      "tags": [
+        "animales",
+        "antigüedad"
+      ],
+      "pitch": "Breves fábulas de animales que dejan, cada una, una enseñanza para la vida.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Relato de un náufrago",
+      "author": "Gabriel García Márquez",
+      "narrator": "Carlos Manuel Vesga",
+      "uri": "spotify:show:0gPz8BRW5bfr8VhSyUlYwi",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "mar",
+        "periodismo",
+        "colombia"
+      ],
+      "pitch": "Un marinero colombiano cuenta los diez días que pasó a la deriva en una balsa, sin comer ni beber.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Noticia de un secuestro",
+      "author": "Gabriel García Márquez",
+      "narrator": "Carlos Manuel Vesga",
+      "uri": "spotify:show:5anBomw941SJfVZAAyBk5g",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "periodismo",
+        "crimen",
+        "colombia"
+      ],
+      "pitch": "La crónica real de varios secuestros ordenados por los narcotraficantes en la Colombia de los noventa.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El olvido que seremos",
+      "author": "Héctor Abad Faciolince",
+      "narrator": "Héctor Abad Faciolince",
+      "uri": "spotify:show:36SttrzGxlXEu7ydjgpYlV",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "familia",
+        "biografía",
+        "colombia"
+      ],
+      "pitch": "Héctor Abad Faciolince recuerda a su padre, un médico de Medellín que luchó por los derechos humanos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Vivir para contarla",
+      "author": "Gabriel García Márquez",
+      "narrator": "Ramsés Ramos",
+      "uri": "spotify:show:16eI0xCR9tNjY3lCTo1ia6",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "biografía",
+        "colombia"
+      ],
+      "pitch": "Las memorias de García Márquez sobre su infancia y juventud, de donde nacieron muchas de sus historias.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Paula",
+      "author": "Isabel Allende",
+      "narrator": "Javiera Gazitua, Isabel Allende",
+      "uri": "spotify:show:7xisVqxHXLBe6II70Ks391",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "familia",
+        "biografía",
+        "chile"
+      ],
+      "pitch": "Isabel Allende escribe para su hija, enferma en un hospital, la historia de su familia y de su propia vida.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El diario de Ana Frank",
+      "author": "Ana Frank",
+      "narrator": "Various Narrators",
+      "uri": "spotify:show:7EiYD9h4N85yrSwUhc1siD",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "guerra",
+        "juventud",
+        "biografía"
+      ],
+      "pitch": "El diario de una muchacha judía que vivió escondida con su familia en Ámsterdam durante la ocupación nazi.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Sapiens",
+      "author": "Yuval Noah Harari",
+      "narrator": "Carlos Manuel Vesga",
+      "uri": "spotify:show:5rQVkU6rkSlCnNXOnXIWca",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "antigüedad",
+        "filosofía"
+      ],
+      "pitch": "Una breve historia de la humanidad, desde los primeros seres humanos hasta el mundo de hoy.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Momentos estelares de la humanidad",
+      "author": "Stefan Zweig",
+      "narrator": "Audiolibros Jorge Estupiñán",
+      "uri": "spotify:show:6GtSylow5vKYAXiMspiEfu",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "biografía",
+        "guerra"
+      ],
+      "pitch": "Relatos de Stefan Zweig sobre momentos decisivos que cambiaron el rumbo de la historia.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El mundo de ayer",
+      "author": "Stefan Zweig",
+      "narrator": "Carles Sianes",
+      "uri": "spotify:show:0HEinPjtmCFrcNnQ5gzEur",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "biografía",
+        "guerra"
+      ],
+      "pitch": "Stefan Zweig recuerda la Europa de su juventud, antes de que las dos guerras mundiales la destruyeran.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Steve Jobs",
+      "author": "Walter Isaacson",
+      "narrator": "Roberto Medina",
+      "uri": "spotify:show:6OozgYWhI9stG2kqCMFKkY",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "biografía",
+        "estados unidos"
+      ],
+      "pitch": "La vida del fundador de Apple, contada a partir de decenas de entrevistas con él y con quienes lo conocieron.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El largo camino hacia la libertad",
+      "author": "Nelson Mandela",
+      "narrator": "Victor Sabi",
+      "uri": "spotify:show:6zXcI2ojDUU6yvNTD9Ayqw",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "biografía",
+        "política",
+        "justicia"
+      ],
+      "pitch": "Nelson Mandela cuenta su vida, desde su infancia en una aldea hasta su lucha contra el apartheid.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Bolívar",
+      "author": "Marie Arana",
+      "narrator": "Malena Rospigliosi Bonilla",
+      "uri": "spotify:show:7d0vrjfU0J7cKk9rB08jaf",
+      "language": "es",
+      "category": "historia y memorias",
+      "tags": [
+        "biografía",
+        "guerra",
+        "política"
+      ],
+      "pitch": "La vida de Simón Bolívar, el Libertador, desde su juventud en Caracas hasta sus campañas por América.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Rimas y leyendas",
+      "author": "Gustavo Adolfo Bécquer",
+      "narrator": "Íñigo Álvarez de Lara, Ariana Martínez Moreno, Pablo Martínez Gugel",
+      "uri": "spotify:show:253OrbTlSBGulSpkX76ipL",
+      "language": "es",
+      "category": "poesía y teatro",
+      "tags": [
+        "amor",
+        "fantástico",
+        "españa"
+      ],
+      "pitch": "Poemas breves sobre el amor y la nostalgia, junto a leyendas misteriosas de la vieja España.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Romancero gitano",
+      "author": "Federico García Lorca",
+      "narrator": "Margarita Xirgu",
+      "uri": "spotify:show:26WLqgndr3FTS5124M1r2Q",
+      "language": "es",
+      "category": "poesía y teatro",
+      "tags": [
+        "amor",
+        "españa"
+      ],
+      "pitch": "Romances de Lorca sobre el mundo gitano de Andalucía, la luna, la noche y la muerte.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Bodas de sangre",
+      "author": "Federico García Lorca",
+      "narrator": "Varios narradores",
+      "uri": "spotify:show:1HXTsFY7W6PSc6pjiU6wzI",
+      "language": "es",
+      "category": "poesía y teatro",
+      "tags": [
+        "amor",
+        "familia",
+        "campo",
+        "españa"
+      ],
+      "pitch": "Una boda en el campo andaluz despierta un viejo amor y las pasiones de dos familias enfrentadas.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Campos de Castilla",
+      "author": "Antonio Machado",
+      "narrator": "Rafael Baena Zapatero",
+      "uri": "spotify:show:3mkqBm0tpNMNom2ZDyh2FN",
+      "language": "es",
+      "category": "poesía y teatro",
+      "tags": [
+        "naturaleza",
+        "españa"
+      ],
+      "pitch": "Poemas sobre los paisajes y las gentes de Castilla, y sobre la memoria y la pérdida.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Veinte poemas de amor y una canción desesperada",
+      "author": "Pablo Neruda",
+      "narrator": "Julio César Luna",
+      "uri": "spotify:show:2Bp2z2OBE750k4Fg2ZBGpO",
+      "language": "es",
+      "category": "poesía y teatro",
+      "tags": [
+        "amor",
+        "chile"
+      ],
+      "pitch": "Poemas de amor juvenil, a la vez apasionados y melancólicos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Aura",
+      "author": "Carlos Fuentes",
+      "narrator": "Carlos Fuentes, Natasha Fuentes",
+      "uri": "spotify:show:4xn1eUnf4CO7IyQJTbVRZQ",
+      "language": "es",
+      "category": "historias de terror",
+      "tags": [
+        "fantástico",
+        "amor",
+        "méxico"
+      ],
+      "pitch": "Un joven historiador acepta un empleo en una vieja casona de Ciudad de México, junto a una viuda y su sobrina.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El retrato de Dorian Gray",
+      "author": "Oscar Wilde",
+      "narrator": "Enric Puig",
+      "uri": "spotify:show:1LBK57zLi3rTJ5kW3kHITE",
+      "language": "es",
+      "category": "historias de terror",
+      "tags": [
+        "fantástico",
+        "filosofía",
+        "inglaterra"
+      ],
+      "pitch": "Un joven muy bello se mantiene sin envejecer mientras su retrato carga con el paso del tiempo y sus culpas.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Frankenstein",
+      "author": "Mary Shelley",
+      "narrator": "Juan Carlos Albarracín",
+      "uri": "spotify:show:4pYN9tmhyyvE3hy2MWZDLb",
+      "language": "es",
+      "category": "historias de terror",
+      "tags": [
+        "ciencia ficción",
+        "venganza"
+      ],
+      "pitch": "Un joven científico da vida a una criatura hecha con partes de cadáveres y debe enfrentar las consecuencias.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Drácula",
+      "author": "Bram Stoker",
+      "narrator": "Juan Magraner",
+      "uri": "spotify:show:2dwdDjJxJN0WqEAyjMKKsl",
+      "language": "es",
+      "category": "historias de terror",
+      "tags": [
+        "fantástico",
+        "viajes",
+        "inglaterra"
+      ],
+      "pitch": "Un abogado inglés viaja a Transilvania para cerrar un negocio con un misterioso conde.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El extraño caso del doctor Jekyll y el señor Hyde",
+      "author": "Robert Louis Stevenson",
+      "narrator": "Octavi Pujades",
+      "uri": "spotify:show:35SwSg9zpbHa9bGx9x346n",
+      "language": "es",
+      "category": "historias de terror",
+      "tags": [
+        "crimen",
+        "fantástico",
+        "inglaterra"
+      ],
+      "pitch": "En el Londres brumoso, un abogado investiga qué une al respetable doctor Jekyll con el siniestro señor Hyde.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El principito",
+      "author": "Antoine de Saint-Exupéry",
+      "narrator": "Máximo Bonella",
+      "uri": "spotify:show:5OWk1CLBQH3f8nvlEoJdT3",
+      "language": "es",
+      "category": "libros para reflexionar",
+      "tags": [
+        "filosofía",
+        "fantástico"
+      ],
+      "pitch": "Un piloto perdido en el desierto conoce a un pequeño príncipe venido de otro planeta.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "El alquimista",
+      "author": "Paulo Coelho",
+      "narrator": "Tomás Leighton",
+      "uri": "spotify:show:1kFcp4W0TsZZCkP5ODMuDn",
+      "language": "es",
+      "category": "libros para reflexionar",
+      "tags": [
+        "viajes",
+        "espiritualidad"
+      ],
+      "pitch": "Un joven pastor andaluz viaja hasta Egipto en busca de un tesoro con el que ha soñado.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Siddhartha",
+      "author": "Hermann Hesse",
+      "narrator": "Horacio Mancilla",
+      "uri": "spotify:show:0977vYklBQExCa3kfZhfgW",
+      "language": "es",
+      "category": "libros para reflexionar",
+      "tags": [
+        "espiritualidad",
+        "filosofía",
+        "viajes"
+      ],
+      "pitch": "Un joven de la India antigua deja su hogar para buscar la sabiduría por distintos caminos.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
+    },
+    {
+      "title": "Juan Salvador Gaviota",
+      "author": "Richard Bach",
+      "narrator": "Rafael Pacheco",
+      "uri": "spotify:show:42fg8L0sseYHHPeUgcrFNc",
+      "language": "es",
+      "category": "libros para reflexionar",
+      "tags": [
+        "animales",
+        "espiritualidad"
+      ],
+      "pitch": "Una gaviota que no se conforma con buscar comida dedica su vida a aprender a volar cada vez mejor.",
+      "verified": "2026-10-14",
+      "chapters_checked": false
     }
   ]
 }
