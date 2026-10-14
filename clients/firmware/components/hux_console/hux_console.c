@@ -142,7 +142,7 @@ static void run_line(char *line, bool usb) {
     } else if (strcmp(cmd, "call") == 0 && argc > 1) {
         /* Bench (F-0031): the mic path as in a call (the echo gate on the
          * speaker's own output, audio.echo every 5 s) without one. */
-        hux_audio_set_call(strcmp(argv[1], "on") == 0);
+        hux_audio_bench_call(strcmp(argv[1], "on") == 0);
     } else if (strcmp(cmd, "echo") == 0 && argc > 2 && strcmp(argv[1], "depth") == 0) {
         hux_audio_set_echo_depth(atoi(argv[2])); /* the gate in dB, saved (F-0031) */
     } else if (strcmp(cmd, "echo") == 0 && argc > 1) {

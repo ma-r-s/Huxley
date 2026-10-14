@@ -77,6 +77,9 @@ void hux_audio_set_echo_mode(int mode);
 /** Console `echo depth <dB>` (20-70, 50 by default): the gate, saved; the
  * next call uses it (F-0031). */
 void hux_audio_set_echo_depth(int db);
+/** Bench (console `call on|off`): call mode with the mic read for the echo
+ * gate only, nothing sent (F-0031). */
+void hux_audio_bench_call(bool on);
 void hux_audio_set_call_jb(int ms);
 
 /** `true` if the mic is actively producing frames. */
