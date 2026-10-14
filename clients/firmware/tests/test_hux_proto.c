@@ -64,16 +64,16 @@ static void test_server_event_unknown_and_odd_payloads(void) {
     HX_ASSERT_TRUE(parse("{\"type\":\"server_event\",\"event\":\"dev.cmd\",\"data\":7}", &m),
                    "a non-object data parses");
     HX_ASSERT_TRUE(m.as.server_event.line[0] == '\0', "no line");
-    char big[400];
+    char big[600];
     int n = snprintf(big, sizeof(big), "{\"type\":\"server_event\",\"event\":\"dev.cmd\","
                                        "\"data\":{\"id\":\"x\",\"line\":\"");
-    for (int i = 0; i < 200; i++) {
+    for (int i = 0; i < 400; i++) {
         big[n++] = 'a';
     }
     snprintf(big + n, sizeof(big) - (size_t)n, "\"}}");
     HX_ASSERT_TRUE(parse(big, &m), "a long line parses");
     HX_ASSERT_TRUE(m.as.server_event.line_truncated, "and says it was cut");
-    HX_ASSERT_EQ((int)strlen(m.as.server_event.line), 127, "kept within the buffer");
+    HX_ASSERT_EQ((int)strlen(m.as.server_event.line), 255, "kept within the buffer");
 }
 
 /* ---- basic shape --------------------------------------------------- */

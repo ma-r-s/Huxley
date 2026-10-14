@@ -97,7 +97,7 @@ typedef struct {
     hux_server_ev_t event;
     char name[32];    /* the event as sent (truncated), for the log */
     char id[24];      /* dev.cmd: echoed in the result (a number arrives as its digits) */
-    char line[128];   /* dev.cmd */
+    char line[256];   /* dev.cmd: as long as a USB line (a Wi-Fi name and password, hex) */
     bool line_truncated;
     char version[48]; /* firmware.update, ota.accept */
     char url[160];    /* firmware.update: relative to the server URI */
