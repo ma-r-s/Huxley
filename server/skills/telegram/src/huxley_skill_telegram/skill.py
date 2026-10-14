@@ -83,6 +83,7 @@ from huxley_skill_telegram.inbox import (
     build_backfill_announcement,
 )
 from huxley_skill_telegram.transport import (
+    CallRefusedError,
     InboundMessage,
     TelegramTransport,
     TransportError,
@@ -446,6 +447,7 @@ def _contact_key(name: str, contacts: dict[str, str]) -> str | None:
 
 _STRINGS: dict[str, dict[str, str]] = {
     "es": {
+        "call_refused": "[Aviso del sistema: el Telegram de {name} no acepta llamadas de números que no tiene guardados; los mensajes sí llegan.] Di en voz alta exactamente «{name} no recibe llamadas de números que no tiene guardados. ¿Le mando un mensaje?» No llames a ninguna herramienta.",
         "read_none": "[Aviso del sistema: pidió sus mensajes y no hay.] Di en voz alta exactamente «No tienes mensajes de {who} en los últimos siete días.» No llames a ninguna herramienta.",
         "read_then": "[Aviso del sistema: estos son sus mensajes, del más reciente al más antiguo.] Léeselos al usuario tal cual, en ese orden: de quién es cada uno, cuándo llegó y lo que dice, sin resumir ni agregar nada. No llames a ninguna herramienta.",
         "read_everyone": "tus contactos",
@@ -516,6 +518,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "en": {
+        "call_refused": "[System notice: {name}'s Telegram refuses calls from numbers they have not saved; messages do get through.] Say out loud exactly \"{name} doesn't take calls from numbers they haven't saved. Shall I send a message?\" Don't call any tool.",
         "read_none": '[System notice: they asked for their messages and there are none.] Say out loud exactly "You have no messages from {who} in the last seven days." Don\'t call any tool.',
         "read_then": "[System notice: these are their messages, newest first.] Read them to the user as they are, in that order: who sent each one, when it arrived and what it says, without summarizing or adding anything. Don't call any tool.",
         "read_everyone": "your contacts",
@@ -580,6 +583,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
     },
     "fr": {
+        "call_refused": "[Avis du système : le Telegram de {name} refuse les appels des numéros qu'il n'a pas enregistrés ; les messages passent.] Dis à voix haute exactement « {name} ne reçoit pas d'appels des numéros qu'il n'a pas enregistrés. Je lui envoie un message ? » N'appelle aucun outil.",
         "read_none": "[Avis du système : il a demandé ses messages et il n'y en a pas.] Dis à voix haute exactement « Tu n'as pas de messages de {who} ces sept derniers jours. » N'appelle aucun outil.",
         "read_then": "[Avis du système : voici ses messages, du plus récent au plus ancien.] Lis-les-lui tels quels, dans cet ordre : de qui est chacun, quand il est arrivé et ce qu'il dit, sans résumer ni rien ajouter. N'appelle aucun outil.",
         "read_everyone": "tes contacts",
@@ -1139,6 +1143,19 @@ class TelegramSkill:
             await self._transport.connect()
             user_id = await self._transport.resolve_contact(phone, name=name)
             await self._transport.place_call(user_id)
+        except CallRefusedError:
+            self._active_contact_name = None
+            await self._logger.ainfo("telegram.place_call_refused", name=name, reason="privacy")
+            return ToolResult(
+                output=json.dumps(
+                    {
+                        "ok": False,
+                        "reason": "call_refused",
+                        "then": self._t("call_refused", name=_spoken_name(name)),
+                    },
+                    ensure_ascii=False,
+                )
+            )
         except TransportError as exc:
             self._active_contact_name = None
             await self._logger.aexception("telegram.place_call_failed", name=name)

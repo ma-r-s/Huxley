@@ -150,6 +150,11 @@ class TransportError(Exception):
     """Raised on any transport-level failure (auth, dial, send)."""
 
 
+class CallRefusedError(TransportError):
+    """The contact's Telegram privacy settings refuse calls from this
+    account (USER_PRIVACY_RESTRICTED): messages may still go through."""
+
+
 class TransportRateLimitedError(TransportError):
     """Telegram asked us to wait (FLOOD_WAIT) before repeating a request."""
 
@@ -643,7 +648,22 @@ class TelegramTransport:
         if self._call_py is None:
             msg = "place_call() before connect()"
             raise TransportError(msg)
-        await self._start_call_bridge(user_id)
+        try:
+            await self._start_call_bridge(user_id)
+        except TransportError:
+            raise
+        except Exception as exc:
+            # Julián's privacy settings refused grandpa's call (2026-10-14):
+            # the raw pyrogram error escaped and he heard only "salió un
+            # error". The bridge is already torn down by now.
+            if (
+                "USER_PRIVACY_RESTRICTED" in str(exc)
+                or type(exc).__name__ == "UserPrivacyRestricted"
+            ):
+                msg = "the contact's Telegram privacy settings refuse calls from this account"
+                raise CallRefusedError(msg) from exc
+            msg = f"place_call failed: {type(exc).__name__}: {str(exc)[:200]}"
+            raise TransportError(msg) from exc
         await logger.ainfo(
             "telegram.transport.call_placed",
             user_id=user_id,

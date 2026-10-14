@@ -2283,3 +2283,25 @@ def test_message_when_words() -> None:
     assert _message_when(at(14, 10, 15), now, tz, "es") == "hoy a las 10:15"
     assert _message_when(at(13, 8, 5), now, tz, "es") == "ayer a las 08:05"
     assert _message_when(at(12, 19, 40), now, tz, "es") == "el lunes a las 19:40"
+
+
+@pytest.mark.asyncio
+async def test_a_call_refused_by_privacy_says_why(tmp_path: Path) -> None:
+    """Julián's privacy settings refused grandpa's call (2026-10-14): he
+    heard only "salió un error"."""
+    from huxley_skill_telegram.transport import CallRefusedError
+
+    def factory(**kwargs: Any) -> StubTransport:
+        t = StubTransport(**kwargs)
+        t.resolve_map = {"+573000000078": 222}
+        t.raise_on_place_call = CallRefusedError("privacy")
+        return t
+
+    skill = TelegramSkill(transport_factory=factory)
+    ctx, _ = _build_ctx(
+        {"api_id": 1, "api_hash": "x", "contacts": {"julián ruiz": "+573000000078"}}, tmp_path
+    )
+    await skill.setup(ctx)
+    out = json.loads((await skill.handle("call_contact", {"name": "julián"})).output)
+    assert out["reason"] == "call_refused"
+    assert "«Julián Ruiz no recibe llamadas de números que no tiene guardados." in out["then"]
