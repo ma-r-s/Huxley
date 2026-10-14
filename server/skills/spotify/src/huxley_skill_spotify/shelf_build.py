@@ -88,6 +88,8 @@ class Verdict:
     reason: str = ""
     chosen: Match | None = None
     alternatives: list[Match] = field(default_factory=list)
+    # False when the chosen edition's chapters weren't checked (--search-only).
+    chapters_checked: bool = True
 
 
 @dataclass(frozen=True)
@@ -202,19 +204,28 @@ def _narrated_by(match: Match, narrator: str | None) -> bool:
 
 
 async def verify(
-    search: SpotifySearch, entry: Entry, language: str, verified: frozenset[str] = frozenset()
+    search: SpotifySearch,
+    entry: Entry,
+    language: str,
+    verified: frozenset[str] = frozenset(),
+    *,
+    search_only: bool = False,
 ) -> Verdict:
     """Find and check this book's edition. Raises SearchError when
     Spotify can't be reached (a 4xx on a pinned lookup is a REJECT).
     `verified`: editions an earlier build already found with chapters;
     they aren't looked up again (searches are cheap, `/audiobooks` is
-    where Spotify blocked the app for 19 hours, 2026-10-13)."""
+    where Spotify blocked the app for 19 hours, 2026-10-13).
+    `search_only`: no `/audiobooks` request at all (while Spotify holds
+    it): the chapters go unchecked and a pinned edition must come back
+    from a search."""
     chapters: dict[str, int] = {uri: 1 for uri in verified}
-    results: list[Match] = []
+    seen: list[Match] = []
     kept: list[Match] = []
     first_problem = "not found"
     for query in (f"{entry.title} {entry.author}", entry.title):
         results = await search.audiobooks(query, limit=SEARCH_LIMIT)
+        seen.extend(results)
         for match in results:
             why = problem(entry, match, language)
             if why is None:
@@ -226,7 +237,14 @@ async def verify(
     note = ""
     pinned: Match | None = None
     if entry.uri:
-        pinned = next((m for m in results if m.uri == entry.uri), None)
+        pinned = next((m for m in seen if m.uri == entry.uri), None)
+        if pinned is None and search_only:
+            seen.extend(await search.audiobooks(entry.title, limit=SEARCH_LIMIT))
+            pinned = next((m for m in seen if m.uri == entry.uri), None)
+            if pinned is None:
+                return Verdict(
+                    entry, "REJECT", "pinned uri not in the search results (search only)"
+                )
         if pinned is None:
             try:
                 pinned, chapters[entry.uri] = await search.audiobook(entry.uri)
@@ -255,6 +273,9 @@ async def verify(
     # The first edition that lists chapters (one without can't be played
     # by chapter: El juego del angel's first edition, 2026-10-13). A pinned
     # one is the only choice: a human picked it.
+    if search_only:
+        first = ranked[0]
+        return _verdict(entry, note, first, kept, [], first.uri in chapters)
     chosen: Match | None = None
     empty: list[str] = []
     for match in ranked[:1] if pinned is not None else ranked:
@@ -271,6 +292,17 @@ async def verify(
         empty.append(match.uri)
     if chosen is None:
         return Verdict(entry, "REJECT", f"no chapters listed for {', '.join(empty)}")
+    return _verdict(entry, note, chosen, kept, empty, True)
+
+
+def _verdict(
+    entry: Entry,
+    note: str,
+    chosen: Match,
+    kept: list[Match],
+    empty: list[str],
+    chapters_checked: bool,
+) -> Verdict:
     alternatives = [m for m in kept if m.uri != chosen.uri and m.uri not in empty]
     if not entry.uri:
         note = note or "no pinned uri: chose one, pin it after a listen"
@@ -278,7 +310,8 @@ async def verify(
         note = (
             note or f"narrator is {', '.join(chosen.narrators) or 'unknown'}, not {entry.narrator}"
         )
-    return Verdict(entry, "CHECK" if note else "OK", note, chosen, alternatives)
+    status = "CHECK" if note else "OK"
+    return Verdict(entry, status, note, chosen, alternatives, chapters_checked)
 
 
 def _unreachable(exc: SearchError) -> bool:
@@ -300,6 +333,7 @@ def shelf_entry(verdict: Verdict, language: str, today: str) -> dict[str, Any]:
         "tags": list(entry.tags),
         "pitch": entry.pitch,
         "verified": today,
+        "chapters_checked": verdict.chapters_checked,
     }
 
 
@@ -368,6 +402,7 @@ def merged_books(
                         "tags": list(entry.tags),
                         "pitch": entry.pitch,
                         "verified": kept.get("verified"),
+                        "chapters_checked": kept.get("chapters_checked", True) is not False,
                     }
                 )
         elif verdict.status != "REJECT":
@@ -394,6 +429,7 @@ async def build(
     only: str | None = None,
     search: SpotifySearch | None = None,
     out: Any = None,
+    search_only: bool = False,
 ) -> int:
     out = out or sys.stdout
     data = yaml.safe_load(plan.shelf_yaml.read_text(encoding="utf-8"))
@@ -416,8 +452,11 @@ async def build(
             previous = list(json.loads(plan.shelf_json.read_text(encoding="utf-8"))["books"])
         except (OSError, ValueError, KeyError, TypeError):
             print("the previous shelf.json can't be read: checking every edition", file=out)
+    # Editions an earlier run found with chapters (not a --search-only one).
     known = {
-        (fold(str(b.get("title"))), fold(str(b.get("author")))): b.get("uri") for b in previous
+        (fold(str(b.get("title"))), fold(str(b.get("author")))): b.get("uri")
+        for b in previous
+        if b.get("chapters_checked", True) is not False
     }
     verdicts: dict[Entry, Verdict] = {}
     stopped: SearchError | None = None
@@ -429,6 +468,7 @@ async def build(
                 entry,
                 plan.language,
                 frozenset({uri}) if isinstance(uri, str) else frozenset(),
+                search_only=search_only,
             )
             verdicts[entry] = verdict
             print(_line(verdict), file=out, flush=True)
@@ -466,6 +506,13 @@ async def build(
         f"{counts['REJECT']} REJECT",
         file=out,
     )
+    unchecked = sum(not v.chapters_checked for v in verdicts.values() if v.status != "REJECT")
+    if unchecked:
+        print(
+            f"search only: chapters not checked for {unchecked} books; run again without "
+            "--search-only when Spotify's /audiobooks answers",
+            file=out,
+        )
     if write:
         today = datetime.now(UTC).date().isoformat()
         books = merged_books(entries, verdicts, previous if only else [], plan.language, today)
@@ -487,10 +534,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("persona_dir", type=Path)
     parser.add_argument("--write", action="store_true", help="write shelf.json")
     parser.add_argument("--only", metavar="TITLE", help="check only titles containing TITLE")
+    parser.add_argument(
+        "--search-only",
+        action="store_true",
+        help="no /audiobooks requests (while Spotify rate-limits them): chapters unchecked",
+    )
     args = parser.parse_args(argv)
     try:
         plan = load_plan(args.persona_dir)
-        return asyncio.run(build(plan, write=args.write, only=args.only))
+        return asyncio.run(
+            build(plan, write=args.write, only=args.only, search_only=args.search_only)
+        )
     except (SetupError, OSError, yaml.YAMLError) as exc:
         print(f"can't build: {exc}", file=sys.stderr)
         return 2

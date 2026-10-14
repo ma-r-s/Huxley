@@ -33,6 +33,30 @@ _CHAPTER_PAGE = 50
 KINDS = ("any", "track", "artist", "album", "playlist", "audiobook")
 
 
+# A Retry-After longer than this is not believed in full (a day).
+MAX_HOLD_S = 86_400.0
+
+
+def _family(url: str) -> str:
+    """The part of the Web API a URL is in: Spotify rate-limits them apart
+    (2026-10-13: /audiobooks blocked for 19 h while /search answered)."""
+    path = url.split("api.spotify.com/v1/", 1)[-1]
+    return path.split("/", 1)[0].split("?", 1)[0] or "other"
+
+
+def _retry_after_s(response: httpx.Response) -> float:
+    try:
+        return max(0.0, float(response.headers.get("Retry-After") or 1))
+    except ValueError:
+        return 1.0
+
+
+def _utc_clock(epoch: float) -> str:
+    from datetime import UTC, datetime
+
+    return datetime.fromtimestamp(epoch, UTC).strftime("%H:%MZ")
+
+
 class SearchError(Exception):
     """Spotify's Web API couldn't answer (network, credentials, quota).
     `status` is the HTTP status when Spotify answered with one."""
@@ -213,6 +237,11 @@ class SpotifySearch:
         # second full run in 20 minutes was told to wait over 30 s).
         self._retry_after_max_s = retry_after_max_s
         self._retries = retries
+        # When Spotify last said "come back at" for each part of the API
+        # (epoch s): until then the live client fails at once instead of
+        # asking again (every book play asked /audiobooks during the 19 h
+        # block of 2026-10-13, which only risks a longer one).
+        self._held_until: dict[str, float] = {}
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -352,6 +381,13 @@ class SpotifySearch:
         return await self._get(SEARCH_URL, {"q": query, "type": types, "limit": limit})
 
     async def _get(self, url: str, params: dict[str, str | int]) -> dict[str, Any]:
+        family = _family(url)
+        until = self._held_until.get(family, 0.0)
+        if time.time() < until:
+            raise SearchError(
+                f"{family} rate limited until {_utc_clock(until)} (Spotify's Retry-After)",
+                status=429,
+            )
         params = dict(params)
         if self._market:
             params["market"] = self._market
@@ -376,6 +412,13 @@ class SpotifySearch:
                 limited += 1  # rate limited: wait as asked (capped)
                 await asyncio.sleep(self._retry_after(response))
                 continue
+            if response.status_code == 429:
+                wait = _retry_after_s(response)
+                self._held_until[family] = time.time() + min(wait, MAX_HOLD_S)
+                raise SearchError(
+                    f"{url.rsplit('/', 1)[-1]} answered 429, retry after {wait:.0f} s",
+                    status=429,
+                )
             if response.status_code == 401:
                 raise SearchError("search unauthorized after token renewal")
             if response.status_code != 200:
@@ -390,11 +433,13 @@ class SpotifySearch:
             return result
 
     def _retry_after(self, response: httpx.Response) -> float:
-        try:
-            wait = float(response.headers.get("Retry-After") or 1)
-        except ValueError:
-            wait = 1.0
-        return max(0.0, min(wait, self._retry_after_max_s or 0.0))
+        return max(0.0, min(_retry_after_s(response), self._retry_after_max_s or 0.0))
+
+    def held_until(self, family: str) -> float | None:
+        """When a rate-limited part of the API ("audiobooks", "search") may
+        be asked again (epoch s), or None."""
+        until = self._held_until.get(family)
+        return until if until is not None and until > time.time() else None
 
     async def _access_token(self, *, force: bool = False) -> str:
         if not force and self._token and time.monotonic() < self._token_expires:

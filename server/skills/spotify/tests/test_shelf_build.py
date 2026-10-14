@@ -403,6 +403,51 @@ class TestWriting:
         assert code == 0 and "dry run" in said and not plan.shelf_json.exists()
 
 
+class TestSearchOnly:
+    """While Spotify holds /audiobooks (a 19 h 429 on 2026-10-13), the shelf
+    is built from searches alone and marked for a chapter check later."""
+
+    async def test_no_audiobooks_request_and_the_chapters_are_marked_unchecked(
+        self, tmp_path: Path
+    ) -> None:
+        plan = _plan(tmp_path, [_entry("El extranjero"), _entry("La peste")])
+        search = FakeSearch(
+            {
+                "El extranjero Albert Camus": [_book("ext", "El extranjero")],
+                "La peste Albert Camus": [_book("peste", "La peste")],
+            }
+        )
+        search.fail_lookups = True  # any /audiobooks request would raise
+        code, said = await _run(plan, search, search_only=True)
+        assert code == 0 and search.looked_up == []
+        assert "chapters not checked for 2 books" in said
+        built = json.loads(plan.shelf_json.read_text(encoding="utf-8"))
+        assert [b["chapters_checked"] for b in built["books"]] == [False, False]
+        assert parse_shelf(built).books[0].uri == "spotify:show:ext"
+
+    async def test_a_pinned_edition_search_doesnt_return_is_left_out(self, tmp_path: Path) -> None:
+        plan = _plan(tmp_path, [_entry("El extranjero", uri="spotify:show:fijo")])
+        search = FakeSearch({"El extranjero Albert Camus": [_book("ext", "El extranjero")]})
+        search.fail_lookups = True
+        code, said = await _run(plan, search, search_only=True, write=False)
+        assert code == 1 and "pinned uri not in the search results (search only)" in said
+
+    async def test_the_next_full_run_checks_what_search_only_left(self, tmp_path: Path) -> None:
+        plan = _plan(tmp_path, [_entry("El extranjero"), _entry("La peste")])
+        results = {
+            "El extranjero Albert Camus": [_book("ext", "El extranjero")],
+            "La peste Albert Camus": [_book("peste", "La peste")],
+        }
+        first = FakeSearch(results)
+        first.fail_lookups = True
+        assert (await _run(plan, first, search_only=True))[0] == 0
+        full = FakeSearch(results)
+        assert (await _run(plan, full))[0] == 0
+        assert full.looked_up == ["spotify:show:ext", "spotify:show:peste"]
+        built = json.loads(plan.shelf_json.read_text(encoding="utf-8"))
+        assert [b["chapters_checked"] for b in built["books"]] == [True, True]
+
+
 class TestSetup:
     def _persona(self, tmp_path: Path, spotify: dict[str, Any], secrets: bool = True) -> Path:
         (tmp_path / "persona.yaml").write_text(

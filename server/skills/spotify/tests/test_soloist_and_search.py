@@ -403,6 +403,38 @@ class TestSearch:
         with pytest.raises(SearchError, match="429"):
             await search.find("x", "track")
 
+    async def test_a_rate_limited_part_is_held_until_spotify_says(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """2026-10-13: /audiobooks answered 429 with Retry-After 68658 s and
+        every book play asked again. The live client now fails at once
+        until then; /search, limited apart, keeps answering."""
+        from huxley_skill_spotify import search as search_module
+
+        now = [1_000_000.0]
+        monkeypatch.setattr(search_module.time, "time", lambda: now[0])
+        _token(httpx_mock)
+        httpx_mock.add_response(
+            url="https://api.spotify.com/v1/audiobooks/abc",
+            status_code=429,
+            headers={"Retry-After": "600"},
+        )
+        search = SpotifySearch("id", "secret", http=httpx.AsyncClient())
+        with pytest.raises(SearchError, match="429"):
+            await search.book("spotify:show:abc")
+        assert search.held_until("audiobooks") == pytest.approx(now[0] + 600)
+        with pytest.raises(SearchError, match="rate limited until"):
+            await search.book("spotify:show:abc")  # no request: the mock has none left
+        httpx_mock.add_response(method="GET", json={"tracks": {"items": []}})
+        assert await search.find("x", "track") is None  # search isn't held
+        now[0] += 601
+        assert search.held_until("audiobooks") is None
+        httpx_mock.add_response(
+            url="https://api.spotify.com/v1/audiobooks/abc",
+            json={"name": "Libro", "authors": [], "chapters": {"items": [], "total": 0}},
+        )
+        assert (await search.book("spotify:show:abc")).title == "Libro"
+
     def test_search_url_is_the_web_api(self) -> None:
         assert SEARCH_URL == "https://api.spotify.com/v1/search"
 

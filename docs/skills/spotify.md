@@ -210,7 +210,14 @@ that book, and a run stopped by Spotify's limit writes what it checked
 full runs in three hours got the app blocked on `/audiobooks` for about
 19 hours (`Retry-After: 68658`; search stayed open): fix one book with
 `--only`. Only the build retries a 429 (3 times, honouring
-`Retry-After` up to 2 minutes); the live skill never waits on one.
+`Retry-After` up to 2 minutes); the live skill never waits on one, and
+both remember Spotify's `Retry-After` per part of the API (`/audiobooks`
+apart from `/search`) and fail at once until then instead of asking
+again. `--search-only` builds without any `/audiobooks` request (while
+Spotify holds it): editions are chosen from searches, a pinned edition
+must come back from one, and each book is written `chapters_checked:
+false`; the next normal run looks those up (one request each) and keeps
+the ones already checked.
 During such a block, books still play and their listening still counts
 (the month's seconds, played, the last book: the stream is a book by its
 `spotify:show:` link), but chapter commands, the end-of-book line and the
