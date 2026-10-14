@@ -5866,7 +5866,7 @@ Branch `t145-shelf` (worktree) on main 8af68aa4: the skill, the build, the shelf
 
 ## T1.46: A phone app of how grandpa uses the walkie
 
-**Status**: `in_progress` (2026-10-13: built and through a critic round on branch `t146-phone-app`, not merged; next: Mario adds it to his home screen and looks, then merge and deploy) · **Owner**: this session · **Effort**: M
+**Status**: `in_progress` (2026-10-13: merged and live on the Pi at /app/; the Books tab ships with T1.45) · **Effort**: M
 
 **Problem** (Mario): he wants to understand how his grandfather uses the walkie, from his iPhone: when he last used it, how much against his usual, who he talks to, what he enjoys, where he struggles. The caregiver's page (`/`, T1.42) is a reliability dashboard: dense, about the device and the server, and it can't tell "quiet" from "unwell", or a bad answer from a good one.
 
@@ -5916,7 +5916,7 @@ Branch `t145-shelf` (worktree) on main 8af68aa4: the skill, the build, the shelf
 
 ## T1.47: One loudness level for everything the walkie plays
 
-**Status**: `in_progress` (2026-10-13; built on branch `t147-loudness`, not merged or deployed; waiting on Mario's ear on the walkie) · **Effort**: M (runtime audio path, SDK field, two skills, assets)
+**Status**: `in_progress` (2026-10-13: merged and live on the Pi; the walkie's prompts re-levelled in firmware 5f699660; waiting on Mario's ear on the walkie) · **Effort**: M (runtime audio path, SDK field, two skills, assets)
 
 **Problem** (Mario, live): the chimes jump out, and he pushes the volume to max for the voice. Every source plays at its own level.
 
@@ -6007,7 +6007,7 @@ Five findings, all fixed with a regression test that fails without the fix:
 
 ## T1.48: Web search and news that actually answer grandpa
 
-**Status**: `in_progress` (2026-10-13): built on branch `t148-search-news` (worktree), eval run on the Pi, critic round taken; waiting on Mario's walkie smoke and the merge · **Effort**: M (two skills + persona; no framework change)
+**Status**: `in_progress` (2026-10-13: merged and live on the Pi; waiting on Mario's walkie smoke) · **Effort**: M (two skills + persona; no framework change)
 
 **Problem.** Search was almost never used, and failed when it was: the one production call (2026-10-12, "cartelera Trocál Parque") hit `search.timeout reason=deadline_exceeded:4.0s`. The persona told the model not to search "stable facts you already know", but its knowledge is stale (it would name the previous Colombian president). Only snippets reached the model, and snippets rarely hold a score, a price or today's plates. News came back as 8 headlines with every clustered headline run together as a "summary" (6.9 KB), `category: local` was the national feed, and the model narrated vaguely ("algo llamado sometimiento", "cada noticia tiene distintos enfoques").
 
