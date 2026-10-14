@@ -28,7 +28,7 @@ Huxley/                              # repo root
 │   │   ├── news/                    #   huxley-skill-news (Open-Meteo + Google News RSS)
 │   │   ├── radio/                   #   huxley-skill-radio (HTTP/Icecast via ffmpeg)
 │   │   ├── spotify/                 #   huxley-skill-spotify (Spotify Soloist; dev/ runs it in Docker on a Mac)
-│   │   ├── search/                  #   huxley-skill-search (DuckDuckGo via ddgs, no API key)
+│   │   ├── search/                  #   huxley-skill-search (ddgs: Yandex, Yahoo, then mixed; page excerpts; no API key)
 │   │   ├── reminders/               #   huxley-skill-reminders (scheduled reminders, persistent, retry escalation)
 │   │   ├── stocks/                  #   huxley-skill-stocks (Alpha Vantage; reference third-party-shape skill)
 │   │   ├── system/                  #   huxley-skill-system (volume, time)
