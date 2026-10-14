@@ -3,9 +3,8 @@
 Stateless helper exposing one operation:
 
 - `stream(url)` — async generator that spawns ffmpeg pulling from an HTTP
-  / Icecast / Shoutcast URL, yields PCM16 chunks at realtime pace from the
-  live edge (`live.live_edge`: a server's connect burst is skipped, not
-  replayed), and tears down the subprocess cleanly on cancellation.
+  / Icecast / Shoutcast URL, yields PCM16 chunks at realtime pace, and
+  tears down the subprocess cleanly on cancellation.
 
 Unlike `AudiobookPlayer`, there's no `probe()` (we don't read metadata),
 no `start_position` (radio is live), and no natural EOF (radio plays
@@ -26,10 +25,8 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING
 
-from huxley_skill_radio.live import live_edge
-
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncIterator
 
 SAMPLE_RATE = 24_000
 BYTES_PER_SAMPLE = 2  # PCM16 little-endian
@@ -53,21 +50,15 @@ class RadioPlayer:
     def __init__(self, ffmpeg_path: str = "ffmpeg") -> None:
         self._ffmpeg_path = ffmpeg_path
 
-    async def stream(
-        self,
-        url: str,
-        on_skip: Callable[[int, str], Awaitable[None]] | None = None,
-    ) -> AsyncIterator[bytes]:
-        """Yield PCM16 chunks from `url` at realtime pace, from the live edge.
+    async def stream(self, url: str) -> AsyncIterator[bytes]:
+        """Yield PCM16 chunks from `url` at realtime pace.
 
         Spawns
         `ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5
-                -user_agent <ua> -i <url> -ac 1 -ar 24000 -f s16le -`
-        and reads stdout in `CHUNK_SIZE`-byte chunks as fast as they come;
-        `live_edge` drops the server's connect burst (Caracol: about 30 s
-        of the past, which `-re` used to replay at real time on every
-        resume) and paces the rest at real time. `on_skip(ms, why)` hears
-        each cut.
+                -user_agent <ua> -re -i <url> -ac 1 -ar 24000 -f s16le -`
+        and reads stdout in `CHUNK_SIZE`-byte chunks. `-re` throttles
+        ffmpeg to realtime playback rate; this gives us natural
+        backpressure over the WebSocket without explicit rate-limiting.
 
         Cancellation: if the caller's task is cancelled, the generator's
         `finally` terminates ffmpeg. The subprocess is never leaked.
@@ -89,6 +80,7 @@ class RadioPlayer:
             "5",
             "-user_agent",
             _USER_AGENT,
+            "-re",  # throttle to realtime
             "-i",
             url,
             "-ac",
@@ -103,20 +95,14 @@ class RadioPlayer:
             stdin=asyncio.subprocess.DEVNULL,
         )
         assert proc.stdout is not None
-        stdout = proc.stdout
-
-        async def chunks() -> AsyncIterator[bytes]:
+        try:
             while True:
                 try:
-                    chunk = await stdout.readexactly(CHUNK_SIZE)
+                    chunk = await proc.stdout.readexactly(CHUNK_SIZE)
                 except asyncio.IncompleteReadError as exc:
                     if exc.partial:
                         yield exc.partial
-                    return
-                yield chunk
-
-        try:
-            async for chunk in live_edge(chunks(), BYTES_PER_SECOND, on_skip=on_skip):
+                    break
                 yield chunk
             returncode = await proc.wait()
             if returncode != 0:

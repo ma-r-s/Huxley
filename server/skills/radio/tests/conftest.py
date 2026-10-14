@@ -31,7 +31,7 @@ class FakeRadioPlayer:
         default_factory=lambda: [b"radio_chunk_1", b"radio_chunk_2"]
     )
 
-    async def stream(self, url: str, on_skip: object = None) -> AsyncIterator[bytes]:
+    async def stream(self, url: str) -> AsyncIterator[bytes]:
         self.urls_streamed.append(url)
         chunks = self.default_chunks
         for key, canned in self.chunks_by_url.items():

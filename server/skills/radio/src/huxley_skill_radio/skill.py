@@ -485,13 +485,10 @@ class RadioSkill:
         assert player is not None
         assert logger is not None
 
-        async def skipped(ms: int, why: str) -> None:
-            await logger.ainfo("radio.backlog_skipped", station_id=station_id, ms=ms, why=why)
-
         async def stream() -> AsyncIterator[bytes]:
             await logger.ainfo("radio.stream_started", station_id=station_id)
             try:
-                async for chunk in player.stream(url, on_skip=skipped):
+                async for chunk in player.stream(url):
                     yield chunk
             except PlayerError as exc:
                 await logger.aexception("radio.stream_error", station_id=station_id, exc=str(exc))

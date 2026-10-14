@@ -83,20 +83,19 @@ The ffmpeg subprocess uses `-reconnect 1 -reconnect_streamed 1
 internet radio does constantly), ffmpeg auto-retries up to 5 seconds.
 Beyond that, ffmpeg exits non-zero and the skill raises `PlayerError`.
 
-Playback starts at the live edge (`live.live_edge`, T1.53). Radio servers
-send a burst of recent audio to every new connection: Caracol's is about
-30 s (32 s of audio in the first 4 s, measured from the Pi on 2026-10-14).
-ffmpeg used to run with `-re`, which played that burst at real time, so
-every resume after a press replayed the last half minute and the radio
-stayed 30 s behind live; his first morning, Mario heard it repeating. Now
-ffmpeg reads as fast as audio arrives and `live_edge` waits until it comes
-no faster than about twice real time with a second in hand, keeps the
-newest second, and paces the rest at real time; a burst mid-stream (an
-ffmpeg reconnect) is cut back to the newest second the same way. On the
-Pi: first audio about 2 s after the request (the burst skipped), then
-43.1 s played in 43.0 s with no dry spot. Each cut or stall is logged as
-`radio.backlog_skipped` (`ms`, `why`: `start` the connect burst, `burst`
-one mid-stream, `underrun` playback waited `ms` for audio).
+`-re` throttles ffmpeg to realtime playback rate, which gives natural
+WebSocket backpressure without explicit rate-limiting.
+
+Radio plays about 30 s behind live, by design of the stations' servers:
+Caracol's sends about 30 s of recent audio to every new connection (32 s
+of audio in the first 4 s, measured from the Pi on 2026-10-14), and `-re`
+plays it at real time. It is a sliding delay, not a loop: two connections
+19 s apart started 17 s apart in the broadcast (their openings match only
+where they overlap). Each resume after a press reconnects and continues
+at the same delay, skipping what aired meanwhile, never replaying it.
+Mario finds the delay fine. A live-edge player (skip the burst, pace
+ourselves, about 2 s slower to start) was built and tested, then reverted
+as unneeded: commit 35966d46 if it is ever wanted.
 
 `-user_agent "huxley-radio/0.1 (+https://github.com/mario/huxley)"`
 identifies us cleanly so server admins aren't blocking us as anonymous bot
