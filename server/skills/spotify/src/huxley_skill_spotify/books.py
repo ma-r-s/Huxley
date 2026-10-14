@@ -368,6 +368,15 @@ class BookMemory:
         value = found.get("opinion") if isinstance(found, dict) else None
         return str(value) if value in OPINIONS else None
 
+    async def rotation_last(self) -> str | None:
+        """The last book "recomiéndame un libro" offered (its uri): the
+        next offer starts after it."""
+        found = await self._get("book:rotation:last")
+        return found if isinstance(found, str) else None
+
+    async def set_rotation_last(self, uri: str) -> None:
+        await self._set("book:rotation:last", uri)
+
     async def mark_offered(self, uris: list[str]) -> None:
         now = time.time()
         for uri in uris:

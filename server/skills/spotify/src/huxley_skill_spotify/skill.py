@@ -74,7 +74,6 @@ from huxley_skill_spotify.books import (
     PLAYED_AFTER_MS,
     BookMemory,
     Label,
-    Listener,
     Place,
     capped_position,
     find_chapter,
@@ -113,9 +112,8 @@ DEFAULT_WS = "ws://127.0.0.1:9090"
 DEFAULT_PCM = "127.0.0.1:4712"
 # The persona's shelf, relative to its data dir (T1.45).
 DEFAULT_SHELF = "../books/shelf.json"
-# Offers per answer, and categories named per answer.
+# Books offered per answer.
 OFFER_COUNT = 3
-CATEGORY_COUNT = 4
 # How long to wait for Soloist to report "playing" after a play command.
 START_TIMEOUT_S = 10.0
 # PCM16 mono 24 kHz: how much sound one captured chunk carries.
@@ -1187,7 +1185,7 @@ class SpotifySkill:
             return await self._browse_like(shelf, like, more=more)
         if query.strip():
             return await self._browse_query(shelf, query, more=more)
-        return await self._browse_categories(shelf, more=more)
+        return await self._browse_rotation(shelf)
 
     # --- The shelf (T1.45) ---
 
@@ -1242,61 +1240,56 @@ class SpotifySkill:
                 position_ms=place.position_ms if place else None,
             )
 
-    def _available_categories(self, shelf: Shelf, listener: Listener) -> list[str]:
-        judge = shelves.Judge(shelf, listener)
-        return [
-            c
-            for c in shelf.categories
-            if any(b.category == c and judge.excluded(b) is None for b in shelf.books)
-        ]
-
-    async def _browse_categories(self, shelf: Shelf, *, more: bool) -> ToolResult:
-        """No subject: the kinds of book that still have something for
-        him, and his book in progress."""
+    async def _browse_rotation(self, shelf: Shelf) -> ToolResult:
+        """No subject ("recomiéndame un libro", "¿qué libros tienes?",
+        "otros"): the next three of the shelf in rotation order, going
+        round, never one he started, finished or disliked. Mario,
+        2026-10-14: choosing a kind first was too much for him; "a list of
+        3 books that rotates every time he asks"."""
         memory = self._require_memory()
-        lang = self._lang()
+        log = self._log()
         listener = await memory.listener()
-        available = self._available_categories(shelf, listener)
-        offset = 0
-        if more and self._browse is not None and self._browse["mode"] == "categories":
-            offset = self._browse["offset"] + CATEGORY_COUNT
-            if offset >= len(available):
-                offset = 0
-        else:
-            more = False
-        named = available[offset : offset + CATEGORY_COUNT]
-        if not named:
-            await self._log().ainfo("spotify.shelf_nothing", reason="nothing_left", query="")
+        judge = shelves.Judge(shelf, listener)
+        order = shelves.rotation_order(shelf)
+        last = await memory.rotation_last()
+        start = next((i + 1 for i, b in enumerate(order) if b.uri == last), 0) % max(len(order), 1)
+        ring = order[start:] + order[:start]
+        open_books = [b for b in ring if judge.excluded(b) is None]
+        if not open_books:
+            await log.ainfo("spotify.shelf_nothing", reason="all_excluded", query="")
             return self._then("books_none")
-        listing = shelves.spoken_list(named, lang)
-        last = None if more else await memory.last_book()
-        if last is not None and not await memory.finished(str(last["uri"])):
-            title = str(last.get("title") or "")
-            line = lines.shelf_line(lang, "categories_started", categories=listing, title=title)
-            self._last_list = [
-                Match(
-                    uri=str(last["uri"]), kind="audiobook", title=title, artist=last.get("author")
-                )
-            ]
-        else:
-            key = "categories_more" if more else "categories"
-            line = lines.shelf_line(lang, key, categories=listing)
-        self._browse = {"mode": "categories", "query": "", "like": "", "offset": offset}
-        await self._log().ainfo(
-            "spotify.shelf_browse",
-            mode="categories",
+        blocked = self._unavailable()
+        if blocked:
+            await log.ainfo("spotify.shelf_blocked", reason=blocked, query="")
+            return self._then(blocked)
+        candidates = [
+            Match(
+                uri=b.uri,
+                kind="audiobook",
+                title=b.title,
+                artist=b.author,
+                languages=(b.language,),
+                about=b.pitch,
+            )
+            for b in open_books
+        ]
+        offered, hours_out = await self._playable_only(candidates, OFFER_COUNT)
+        if hours_out:
+            return self._then("no_hours")
+        if not offered:
+            await log.ainfo("spotify.shelf_nothing", reason="none_playable", query="")
+            return self._then("none_available")
+        await memory.set_rotation_last(offered[-1].uri)
+        return await self._said_offer(
+            mode="rotation",
             query="",
             like="",
             like_source=None,
-            excluded=None,
-            offered=named,
-            offset=offset,
-        )
-        return ToolResult(
-            output=json.dumps(
-                {"ok": True, "categories": named, "then": lines.say(lang, line)},
-                ensure_ascii=False,
-            )
+            topic="",
+            offered=offered,
+            excluded=len(ring) - len(open_books),
+            offset=start,
+            already=[],
         )
 
     async def _browse_query(self, shelf: Shelf, query: str, *, more: bool) -> ToolResult:
@@ -1481,6 +1474,8 @@ class SpotifySkill:
             head = "head_found"
         elif mode == "like":
             head = "head_more_like" if more else "head_like"
+        elif mode == "rotation":
+            head = "head_pick"
         else:
             head = "head_more" if more else "head"
         line = lines.offer(
@@ -1588,15 +1583,13 @@ class SpotifySkill:
         )
 
     async def _nothing(self, shelf: Shelf, *, topic: str = "") -> ToolResult:
-        """Nothing fits: say what kinds of book there are."""
+        """Nothing fits: offer recommendations instead (no list of kinds:
+        Mario, 2026-10-14, choosing a kind was too much for him)."""
         lang = self._lang()
-        listener = await self._require_memory().listener()
-        named = self._available_categories(shelf, listener)[:CATEGORY_COUNT]
-        listing = shelves.spoken_list(named or list(shelf.categories[:CATEGORY_COUNT]), lang)
         if topic:
-            line = lines.shelf_line(lang, "no_more", topic=topic, categories=listing)
+            line = lines.shelf_line(lang, "no_more", topic=topic)
         else:
-            line = lines.shelf_line(lang, "nothing", categories=listing)
+            line = lines.shelf_line(lang, "nothing")
         self._browse = None
         return ToolResult(
             output=json.dumps(

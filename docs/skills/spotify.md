@@ -238,8 +238,13 @@ search.
 **`find_books(query?, like?, more?, listened?)`** never offers from open
 search:
 
-- no arguments: up to four categories that still have books for him,
-  plus his book in progress ("También quedó a medias ...");
+- no arguments ("recomiéndame un libro", "¿qué libros tienes?"): the
+  next three of the shelf in rotation order, one kind after another
+  (`shelf.rotation_order`), continuing after the last three offered
+  (`book:rotation:last`) and round again at the end; never one he
+  started, finished, disliked or Spotify refused. Mario, 2026-10-14:
+  choosing a kind first was too much for him (it used to name up to four
+  categories and his book in progress);
 - `query`: a shelf title; else, when every word names a kind of book on
   the shelf, a category or tag ("Breve historia del tiempo" is a title,
   not the history category); else a shelf author; best three. A book or
@@ -249,8 +254,9 @@ search:
 - `like`: books sharing category, tags and author with one he names; a
   book not on the shelf is looked up once for its author and synopsis
   words;
-- `more`: the next three of the last offer ("otros"); after a single
-  book, books like it; with a new subject, a fresh offer for it;
+- `more`: the next three of the last offer ("otros"; after a
+  recommendation, the next three of the rotation); after a single book,
+  books like it; with a new subject, a fresh offer for it;
 - `listened`: the books started here.
 
 Asking for books ends whatever was playing (`CancelMedia`): it stays
@@ -258,15 +264,16 @@ paused at its place instead of coming back over the offer (2026-10-14:
 after each list the last book resumed, "¿Cuál pongo?" included); "sigue
 con el libro" continues it. A book in general ("pon un libro", "ponme
 algo para leer") is choosing, not continuing: the tool text sends it
-to `find_books` with no arguments, which names the kinds of book and the
-one in progress.
+to `find_books` with no arguments, which recommends the next three.
 
-The skill writes the offer itself in `then` ("De misterio tengo tres.
+The skill writes the offer itself in `then` ("Te recomiendo tres. Uno,
+...", or for a topic "De misterio tengo tres.
 Uno, X, de Y: <pitch>. ... ¿Cuál pongo, o busco otros?") and returns
 `books[{n, title, by, about}]` so "el segundo" or "el dos" plays the
 second; a book he named and already started is offered in his own
 edition, so "ponlo" continues it. Nothing
-fits: "En la repisa no tengo libros de eso. Tengo libros de <categorías>."
+fits: "En la repisa no tengo libros de eso. ¿Te recomiendo otros?"; a
+topic run out: "Ya no tengo más de <tema>. ¿Te recomiendo otros?".
 
 **Ranking.** Never offered: finished (at any time, kept as
 `book:ended:<id>`), disliked, refused here, started (in progress, or

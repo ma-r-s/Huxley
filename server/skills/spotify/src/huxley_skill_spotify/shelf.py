@@ -595,6 +595,21 @@ def similar(
     return found
 
 
+def rotation_order(shelf: Shelf) -> list[ShelfBook]:
+    """The shelf in the order "recomiéndame un libro" walks it: one book of
+    each kind in turn (the kinds in the shelf's order, each kind's books in
+    theirs), so three in a row are of three kinds and an author rarely
+    comes twice running (Mario, 2026-10-14: no choosing a kind first)."""
+    queues = {c: [b for b in shelf.books if b.category == c] for c in shelf.categories}
+    order: list[ShelfBook] = []
+    while any(queues.values()):
+        for c in shelf.categories:
+            if queues[c]:
+                order.append(queues[c].pop(0))
+    order.extend(b for b in shelf.books if b.category not in queues)
+    return order
+
+
 def spoken_list(items: list[str], lang: str) -> str:
     """'a, b y c'; Spanish says 'e' before an 'i' sound ('cuentos e
     historia'), French 'et', English 'and'."""

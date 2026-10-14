@@ -305,6 +305,7 @@ def listing(lang: str, *, started: bool = False) -> str:
 _SHELF: dict[str, dict[str, str]] = {
     "es": {
         "head": "De {topic} tengo {n}.",
+        "head_pick": "Te recomiendo {n}.",
         "head_like": "Parecidos a {topic} tengo {n}.",
         "head_more": "Tengo {n} más de {topic}.",
         "head_more_like": "Tengo {n} más parecidos a {topic}.",
@@ -315,20 +316,15 @@ _SHELF: dict[str, dict[str, str]] = {
         "one_bare": "{title}, de {author}.",
         "ask_many": "¿Cuál pongo, o busco otros?",
         "ask_one": "¿Lo pongo, o busco otros?",
-        "categories": "Tengo libros de {categories}. ¿De cuál busco?",
-        "categories_more": "También tengo libros de {categories}. ¿De cuál busco?",
-        "categories_started": "Tengo libros de {categories}. También quedó a medias {title}. "
-        "¿Sigo con ese libro, o de cuál busco?",
-        "nothing": "En la repisa no tengo libros de eso. Tengo libros de {categories}. "
-        "¿De cuál busco?",
-        "no_more": "Ya no tengo más de {topic}. También tengo libros de {categories}. "
-        "¿De cuál busco?",
+        "nothing": "En la repisa no tengo libros de eso. ¿Te recomiendo otros?",
+        "no_more": "Ya no tengo más de {topic}. ¿Te recomiendo otros?",
         "liked": "Anotado que {title} gustó. Buscaré más libros así.",
         "disliked": "Anotado que {title} no gustó; no lo vuelvo a ofrecer.",
         "opinion_which": "No sé de qué libro. ¿Cuál fue?",
     },
     "en": {
         "head": "For {topic} I have {n}.",
+        "head_pick": "Here are {n} I'd suggest.",
         "head_like": "Like {topic}, I have {n}.",
         "head_more": "I have {n} more for {topic}.",
         "head_more_like": "I have {n} more like {topic}.",
@@ -339,20 +335,15 @@ _SHELF: dict[str, dict[str, str]] = {
         "one_bare": "{title}, by {author}.",
         "ask_many": "Which one shall I play, or shall I look for others?",
         "ask_one": "Shall I play it, or look for others?",
-        "categories": "I have books in {categories}. Which shall I look in?",
-        "categories_more": "I also have books in {categories}. Which shall I look in?",
-        "categories_started": "I have books in {categories}. There's also {title}, half "
-        "finished. Shall I carry on with it, or which shall I look in?",
-        "nothing": "I have no books on that on the shelf. I have books in {categories}. "
-        "Which shall I look in?",
-        "no_more": "I have no more for {topic}. I also have books in {categories}. "
-        "Which shall I look in?",
+        "nothing": "I have no books on that on the shelf. Shall I suggest others?",
+        "no_more": "I have no more for {topic}. Shall I suggest others?",
         "liked": "Noted: {title} was liked. I'll look for more books like it.",
         "disliked": "Noted: {title} wasn't liked; I won't offer it again.",
         "opinion_which": "I don't know which book. Which one was it?",
     },
     "fr": {
         "head": "En {topic}, j'en ai {n}.",
+        "head_pick": "Je t'en propose {n}.",
         "head_like": "Dans le style de {topic}, j'en ai {n}.",
         "head_more": "J'en ai {n} de plus en {topic}.",
         "head_more_like": "J'en ai {n} de plus dans le style de {topic}.",
@@ -363,14 +354,8 @@ _SHELF: dict[str, dict[str, str]] = {
         "one_bare": "{title}, de {author}.",
         "ask_many": "Lequel je mets, ou j'en cherche d'autres ?",
         "ask_one": "Je le mets, ou j'en cherche d'autres ?",
-        "categories": "J'ai des livres de {categories}. Dans lequel je cherche ?",
-        "categories_more": "J'ai aussi des livres de {categories}. Dans lequel je cherche ?",
-        "categories_started": "J'ai des livres de {categories}. Il y a aussi {title}, "
-        "commencé. Je continue celui-là, ou dans lequel je cherche ?",
-        "nothing": "Je n'ai pas de livres de ce genre sur l'étagère. J'ai des livres de "
-        "{categories}. Dans lequel je cherche ?",
-        "no_more": "Je n'en ai plus en {topic}. J'ai aussi des livres de {categories}. "
-        "Dans lequel je cherche ?",
+        "nothing": "Je n'ai pas de livres de ce genre sur l'étagère. Je t'en propose d'autres ?",
+        "no_more": "Je n'en ai plus en {topic}. Je t'en propose d'autres ?",
         "liked": "Noté : {title} a plu. Je chercherai d'autres livres comme ça.",
         "disliked": "Noté : {title} n'a pas plu ; je ne le proposerai plus.",
         "opinion_which": "Je ne sais pas de quel livre. Lequel c'était ?",

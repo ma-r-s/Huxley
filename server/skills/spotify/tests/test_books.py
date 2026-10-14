@@ -24,7 +24,15 @@ from huxley_skill_spotify.books import BookMemory, Place, capped_position
 from huxley_skill_spotify.search import BookInfo, Chapter, Match
 from huxley_skill_spotify.skill import SpotifySkill, _unheard_words
 
-from .conftest import FakeSearch, FakeSoloist, PcmServer, Recorded, make_ctx, write_shelf
+from .conftest import (
+    SHELF_BOOKS,
+    FakeSearch,
+    FakeSoloist,
+    PcmServer,
+    Recorded,
+    make_ctx,
+    write_shelf,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -1124,6 +1132,7 @@ async def test_the_log_says_which_chapter_of_how_many(
 
 SABUESO = "spotify:show:sabueso"
 ORIENT = "spotify:show:orient"
+ALL_SHELF = [str(b["uri"]) for b in SHELF_BOOKS]
 DIEZ = "spotify:show:diez"
 ESCARLATA = "spotify:show:escarlata"
 MISTERIO = [SABUESO, ORIENT, DIEZ, ESCARLATA]
@@ -1172,27 +1181,56 @@ def _said(result: Any) -> str:
 
 
 class TestTheShelf:
-    async def test_no_subject_names_the_kinds_of_book_without_searching(
+    async def test_recommend_gives_three_and_rotates_without_searching(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
-        result = await skill.handle("find_books", {})
-        assert _said(result) == (
-            "Tengo libros de misterio y suspenso, novela latinoamericana, cuentos e historia "
-            "y memorias. ¿De cuál busco?"
-        )
+        """Mario, 2026-10-14: no choosing a kind; three books, the next three
+        each time he asks, round again at the end. One of each kind in turn."""
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server, known=ALL_SHELF)
+        seen = []
+        for _ in range(4):
+            result = await skill.handle("find_books", {})
+            seen.append([b["title"] for b in _out(result)["books"]])
+        assert seen == [
+            ["El sabueso de los Baskerville", "Cien años de soledad", "Ficciones"],
+            [
+                "Relato de un náufrago",
+                "La vuelta al mundo en ochenta días",
+                "Asesinato en el Orient Express",
+            ],
+            ["El coronel no tiene quien le escriba", "Cuentos de la selva", "Diez negritos"],
+            ["Pedro Páramo", "Estudio en escarlata", "El sabueso de los Baskerville"],
+        ]
+        first = await skill.handle("find_books", {})
+        assert _said(first).startswith("Te recomiendo tres. Uno, ")
         assert skill._search.queries == []  # type: ignore[union-attr]
-        more = await skill.handle("find_books", {"more": True})
-        assert _said(more) == "También tengo libros de aventuras. ¿De cuál busco?"
+        browse = _events(skill, "spotify.shelf_browse")[-1]
+        assert browse["mode"] == "rotation"
 
-    async def test_his_book_in_progress_is_offered_with_the_kinds(
+    async def test_recommend_skips_books_he_started_or_finished(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
-        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server)
-        await memory.set_last_book(PEDRO.uri, PEDRO.title, PEDRO.artist)
-        result = await skill.handle("find_books", {})
-        assert "También quedó a medias Pedro Páramo." in _said(result)
-        assert _out(await skill.handle("play_book", {"title": "ese"}))["playing"] == "Pedro Páramo"
+        skill, _, _, memory = await _shelf_skill(tmp_path, pcm_server, known=ALL_SHELF)
+        await memory.mark_played("spotify:show:cien", "Cien años de soledad", None)
+        await memory.mark_finished("spotify:show:sabueso")
+        offered: set[str] = set()
+        for _ in range(4):
+            result = await skill.handle("find_books", {})
+            offered.update(b["title"] for b in _out(result)["books"])
+        assert "Cien años de soledad" not in offered
+        assert "El sabueso de los Baskerville" not in offered
+        assert len(offered) == 9  # all the others came round
+
+    async def test_otros_continues_the_rotation(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server, known=ALL_SHELF)
+        await skill.handle("find_books", {})
+        more = await skill.handle("find_books", {"more": True})
+        assert _out(more)["books"][0]["title"] == "Relato de un náufrago"
+        assert _out(await skill.handle("play_book", {"title": "el dos"}))["playing"] == (
+            "La vuelta al mundo en ochenta días"
+        )
 
     async def test_a_theme_offers_three_from_the_shelf_in_the_skills_words(
         self, tmp_path: Path, pcm_server: PcmServer
@@ -1230,7 +1268,7 @@ class TestTheShelf:
             "Doyle: De qué trata Estudio en escarlata. ¿Lo pongo, o busco otros?"
         )
         done = await skill.handle("find_books", {"more": True})
-        assert _said(done).startswith("Ya no tengo más de misterio y suspenso. También tengo")
+        assert _said(done) == "Ya no tengo más de misterio y suspenso. ¿Te recomiendo otros?"
         assert skill._search.queries == []  # type: ignore[union-attr]
 
     async def test_a_book_spotify_refuses_is_left_out_and_remembered(
@@ -1248,15 +1286,12 @@ class TestTheShelf:
         again = await skill.handle("find_books", {"query": "misterio"})
         assert ORIENT not in [b["title"] for b in _out(again)["books"]]
 
-    async def test_nothing_fits_names_the_kinds_of_book(
+    async def test_nothing_fits_offers_recommendations(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
         skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
         result = await skill.handle("find_books", {"query": "dragones"})
-        assert _said(result) == (
-            "En la repisa no tengo libros de eso. Tengo libros de misterio y suspenso, novela "
-            "latinoamericana, cuentos e historia y memorias. ¿De cuál busco?"
-        )
+        assert _said(result) == "En la repisa no tengo libros de eso. ¿Te recomiendo otros?"
         assert _events(skill, "spotify.shelf_nothing")[0]["reason"] == "no_match"
 
     async def test_an_author_not_on_the_shelf_gets_only_their_own_books(
