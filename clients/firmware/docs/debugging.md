@@ -397,7 +397,8 @@ With an IP but no server, the ladder's Wi-Fi step and every 10 min after
 move to the next one heard (`why=ladder|no_server`). Every `ws.error`
 says why now: `type= tls_err= tls_stack= sock_errno= http_status=` (an
 HTTP 530 is the tunnel down; a DNS or socket error, the network's
-filter). The driver keeps no password in flash (`WIFI_STORAGE_RAM`).
+filter; the TLS and socket fields are filled for `type=1`, a transport
+error, and 0 otherwise: the library leaves them unset). The driver keeps no password in flash (`WIFI_STORAGE_RAM`).
 
 Adding the place's network, on site: plug the walkie into the laptop
 with a data cable and run `tools/wifi.py add` in your own terminal (the
