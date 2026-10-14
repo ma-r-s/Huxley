@@ -2143,3 +2143,52 @@ def test_spoken_number(phone: str, cc: str, lang: str, spoken: str) -> None:
     from huxley_skill_telegram.skill import _spoken_number
 
     assert _spoken_number(phone, cc, lang) == spoken
+
+
+class TestNamesHeSays:
+    """Full names saved, the first names said (Mario, 2026-10-14: his
+    contacts as Juan Miguel Ruiz, Adela Ruiz, Adela Sabogal...)."""
+
+    @pytest.mark.parametrize(
+        ("said", "key"),
+        [
+            ("juan miguel", "juan miguel ruiz"),
+            ("Juan Miguel Ruiz", "juan miguel ruiz"),
+            ("julian", "julián ruiz"),
+            ("elsa", "elsa sarmiento"),
+            ("adela", None),  # two Adelas: ask which
+            ("adela sabogal", "adela sabogal"),
+            ("pedro", None),
+        ],
+    )
+    def test_contact_key(self, said: str, key: str | None) -> None:
+        from huxley_skill_telegram.skill import _contact_key
+
+        contacts = {
+            "juan miguel ruiz": "+573000000001",
+            "julián ruiz": "+573000000002",
+            "elsa sarmiento": "+573000000003",
+            "adela ruiz": "+573000000004",
+            "adela sabogal": "+573000000005",
+        }
+        assert _contact_key(said, contacts) == key
+
+    @pytest.mark.asyncio
+    async def test_a_first_name_calls_the_one_contact_it_fits(self, tmp_path: Path) -> None:
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573000000001": 4242}
+            captured.append(t)
+            return t
+
+        skill = TelegramSkill(transport_factory=factory)
+        ctx, _ = _build_ctx(
+            {"api_id": 1, "api_hash": "x", "contacts": {"juan miguel ruiz": "+573000000001"}},
+            tmp_path,
+        )
+        await skill.setup(ctx)
+        result = await skill.handle("call_contact", {"name": "Juan Miguel"})
+        assert json.loads(result.output)["ok"] is True
+        assert captured[0].placed_calls == [4242]

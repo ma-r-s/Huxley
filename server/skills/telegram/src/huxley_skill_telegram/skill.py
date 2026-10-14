@@ -384,18 +384,30 @@ def _fold_name(text: str) -> str:
 
 
 def _match_contact(words: list[str], contacts: dict[str, str]) -> str | None:
-    """The contact these words name: the whole name, or all its words."""
+    """The contact these words name: the whole name, or the only contact
+    whose name holds all the words ("juan miguel" -> "juan miguel ruiz")
+    or whose words all were said. Two candidates ("adela" with Adela Ruiz
+    and Adela Sabogal) is no answer: the caller asks which."""
     if not words:
         return None
     asked = " ".join(words)
     for name in contacts:
         if _fold_name(name) == asked:
             return name
-    for name in contacts:
-        parts = set(_fold_name(name).split())
-        if set(words) <= parts or parts <= set(words):
-            return name
-    return None
+    fits = [
+        name
+        for name in contacts
+        if set(words) <= set(_fold_name(name).split())
+        or set(_fold_name(name).split()) <= set(words)
+    ]
+    return fits[0] if len(fits) == 1 else None
+
+
+def _contact_key(name: str, contacts: dict[str, str]) -> str | None:
+    """The saved contact a spoken name means: exact, else the one match."""
+    if name in contacts:
+        return name
+    return _match_contact(_fold_name(name).split(), contacts)
 
 
 _STRINGS: dict[str, dict[str, str]] = {
@@ -1046,6 +1058,7 @@ class TelegramSkill:
             await self._logger.awarning("telegram.called_unconfigured", name=name)
             return _error_result(self._t("not_configured_call"))
 
+        name = _contact_key(name, self._contacts) or name
         phone = self._contacts.get(name)
         if phone is None:
             await self._logger.ainfo(
@@ -1089,6 +1102,7 @@ class TelegramSkill:
             await self._logger.awarning("telegram.send_unconfigured", name=name)
             return _error_result(self._t("not_configured_send"))
 
+        name = _contact_key(name, self._contacts) or name
         phone = self._contacts.get(name)
         if phone is None:
             await self._logger.ainfo(
