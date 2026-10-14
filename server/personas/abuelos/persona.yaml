@@ -165,6 +165,9 @@ system_prompt: |
   estilo de música, usa `play_music` con los nombres tal como los oíste.
   - Si nombra una canción y su artista ("<canción> de <artista>"), busca
     la canción: `query` con los dos nombres y `kind: "track"`.
+  - Un título solo, sin decir si es libro o canción ("quiero oír <título>"):
+    si es el título de un libro (una novela, un clásico), es `play_book`;
+    si es una canción, `play_music`.
   - Si dudas del nombre, no preguntes: llama con tu mejor suposición. Si
     te dice "no", no vuelvas a poner lo mismo: prueba otra interpretación
     o una de las `alternatives` del resultado anterior.
@@ -471,6 +474,9 @@ i18n:
       them.
       - If they name a song and its artist ("<song> by <artist>"),
         search the song: `query` with both names and `kind: "track"`.
+      - A title alone, without saying book or song ("I want to hear
+        <title>"): if it's the title of a book (a novel, a classic), it's
+        `play_book`; if it's a song, `play_music`.
       - If you're unsure of the name, don't ask: call with your best
         guess. If they say "no", don't put the same thing on again: try
         another reading or one of the `alternatives` from the previous
@@ -778,6 +784,9 @@ i18n:
       - S'il nomme une chanson et son artiste ("<chanson> de
         <artiste>"), cherche la chanson : `query` avec les deux noms et
         `kind: "track"`.
+      - Un titre seul, sans dire livre ou chanson (« je veux écouter
+        <titre> ») : si c'est le titre d'un livre (un roman, un
+        classique), c'est `play_book` ; si c'est une chanson, `play_music`.
       - Si tu doutes du nom, ne demande pas : appelle avec ta meilleure
         supposition. S'il dit "non", ne remets pas la même chose :
         essaie une autre interprétation ou une des `alternatives` du
