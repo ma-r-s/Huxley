@@ -623,6 +623,19 @@ def test_books_are_the_page_cards_view() -> None:
     assert books["shelf"]["categories"][0]["left"] == [{"title": "María", "author": ""}]
 
 
+def test_a_category_with_no_books_is_left_out() -> None:
+    """The overnight shelf named 11 categories but built 7: no 0/0 rows."""
+    from huxley_watch.bookshelf import Shelf
+
+    shelf = Shelf(
+        ("novela", "poesía"),
+        ({"title": "María", "uri": "spotify:show:b", "category": "novela"},),
+    )
+    books = app.build(inputs([], now=NOW, shelf=shelf), [], interval_s=300)["books"]
+    assert books["shelf"] is not None
+    assert [c["name"] for c in books["shelf"]["categories"]] == ["novela"]
+
+
 def test_no_shelf_and_no_books_yet() -> None:
     books = build([])["books"]
     assert books == {"reading": [], "finished": [], "dropped": [], "shelf": None}

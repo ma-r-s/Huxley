@@ -599,6 +599,8 @@ def bookshelf(i: Inputs) -> dict[str, Any]:
         left_total = 0
         for name in i.shelf.categories:
             books = [b for b in i.shelf.books if b.get("category") == name]
+            if not books:
+                continue  # named in shelf.yaml, nothing built in it yet
             left = [b for b in books if b["uri"] not in started]
             left_total += len(left)
             cats.append(
