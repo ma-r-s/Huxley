@@ -212,7 +212,7 @@ open, every 60 s while it is on screen, and on a pull at the top.
 `http://<the box's Tailscale address>:8780/app/` in Safari, Share, Add to
 Home Screen. It opens full screen as "Walkie", light or dark with the phone.
 
-Three tabs, one scrolling screen each:
+Four tabs, one scrolling screen each:
 
 - **Today**: "updated HH:MM" (grey once the watcher stopped checking or the
   box can't be reached); **last used**, big ("40 min ago"), with the time
@@ -298,6 +298,14 @@ Three tabs, one scrolling screen each:
   bench's and other clients' too; only the walkie's outside bench windows
   are his. The corrections are words, not meaning: "no, gracias" to an
   offer counts too.
+- **Books** (T1.45): **reading now**, each with its author, a chapter bar
+  ("ch 3 of 32") and when he last heard it, a heart if he liked it;
+  **finished**, a count and a chip each (a heart: liked; struck through:
+  didn't); **left halfway** (started, never finished, not the latest, not
+  heard for 21 days: never offered again); **on the shelf**, "131 of 134
+  left" and a bar per category with what's left, tapping a category opens
+  its titles (kept open across the minute's redraw). The same sorting as
+  the page's Books card (`views.bookshelf`), so the two never disagree.
 - **Timezone**: his (the persona's). When the phone's own zone differs, the
   header says whose ("Bogota time").
 - **Privacy**: a day's words are fetched each time (`cache: no-store`; the
@@ -332,7 +340,12 @@ segments (no second reader of the logs; `talks.py` for the requests):
   minutes since his midnight, `said` (null for a hallucination), `tool`,
   `query`, `reasons`, `detail`);
   `days` (as `trends.days`, today first, back to the logs' first day, 40 at
-  most).
+  most);
+- `books`: `reading`, `finished`, `dropped` (each `title`, `author`,
+  `liked`, `disliked`, `ago`; reading rows also `chapter` from 1,
+  `chapters`, `pct`) and `shelf` (`total`, `left`, `categories`: `name`,
+  `total`, `left` titles with authors) or null without a shelf file. Added
+  to schema 1 (a new key: older app files ignore it).
 
 If it can't be built, `/app.json` is `{"schema": 1, "error": "<type>",
 "checked_at": ...}` (and `watch.step_failed step=app`); the page and the
@@ -444,7 +457,7 @@ error's type: one line per hourly attempt), `watch.openai_cache_unreadable`,
 `watch.openai_cache_write_failed`,
 `watch.cycle_failed`, `watch.app_json_built` (debug, every cycle: requests
 and struggles today, the usual's state and days, people, days listed,
-bytes, duration), `watch.archive_day` (a day built: files read,
+books being read, bytes, duration), `watch.archive_day` (a day built: files read,
 rows, rows by kind, bytes, duration), `watch.archive_read_failed`
 (and `watch.step_failed step=archive_day` with the day and where). Errors
 are logged by type, never by message: a message can quote a token or the

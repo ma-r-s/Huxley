@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import statistics
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 from huxley_watch import talks
 from huxley_watch.facts import merge
 from huxley_watch.text import short_when
+from huxley_watch.views import bookshelf
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -179,6 +180,46 @@ class Trends(TypedDict):
     first_use: FirstUse
 
 
+class BookRow(TypedDict, total=False):
+    title: str
+    author: str
+    liked: bool
+    disliked: bool
+    ago: str | None  # since he last heard it, short ("3 d")
+    # Reading rows only: the chapter he's on (1-based) of how many, as %.
+    chapter: int | None
+    chapters: int | None
+    pct: int | None
+
+
+class ShelfTitle(TypedDict):
+    title: str
+    author: str
+
+
+class ShelfCategory(TypedDict):
+    name: str
+    total: int
+    left: list[ShelfTitle]  # not started yet: what can still be offered
+
+
+class Shelf(TypedDict):
+    total: int
+    left: int
+    categories: list[ShelfCategory]
+
+
+class Books(TypedDict):
+    """His books (T1.45), the page card's own view (views.bookshelf):
+    reading now, finished, left (started, unheard 21 days, not the latest)
+    and the curated shelf the walkie recommends from (None: no shelf)."""
+
+    reading: list[BookRow]
+    finished: list[BookRow]
+    dropped: list[BookRow]
+    shelf: Shelf | None
+
+
 class Talks(TypedDict):
     requests_today: int
     struggles: list[Struggle]  # today's, oldest first
@@ -196,6 +237,7 @@ class AppStatus(TypedDict):
     today: Today
     trends: Trends
     talks: Talks
+    books: Books
 
 
 # --- helpers ---------------------------------------------------------------
@@ -650,6 +692,7 @@ def build(i: Inputs, segments: Sequence[Segment], *, interval_s: float) -> AppSt
             "struggles": _struggles(i, verdicts),
             "days": list(reversed(talk_days)),
         },
+        "books": cast("Books", bookshelf(i)),
     }
 
 
@@ -677,4 +720,5 @@ def summary(status: AppStatus) -> dict[str, object]:
         "usual_days": used["days"],
         "people": len(status["today"]["people"]),
         "talk_days": len(status["talks"]["days"]),
+        "books_reading": len(status["books"]["reading"]),
     }

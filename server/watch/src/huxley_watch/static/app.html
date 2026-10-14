@@ -148,6 +148,25 @@ b.sw.usual{background:var(--usual)}b.sw.mk{width:4px;background:var(--ink)}
 .gap::before,.gap::after{content:"";flex:1;border-top:1px dashed var(--grid)}.gap::before{flex:0 0 14px}
 details.bgroup>summary{list-style:none;cursor:pointer}details.bgroup>summary::-webkit-details-marker{display:none}
 details.bgroup>.li{opacity:.45;filter:grayscale(1)}
+.bk{display:flex;align-items:center;gap:12px;padding:8px 0;min-height:56px}
+.bk+.bk{border-top:1px solid var(--grid)}
+.bk .mt .sub{margin-top:2px}
+.bk .prog{margin-top:6px}
+.chip.liked{background:color-mix(in srgb,var(--book) 18%,transparent);color:var(--ink)}
+.chip.nope{text-decoration:line-through;color:var(--mute)}
+details.cat{border-top:1px solid var(--grid)}
+details.cat:first-of-type{border-top:0}
+details.cat>summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) 64px 44px 18px;align-items:center;gap:10px;min-height:48px}
+details.cat>summary::-webkit-details-marker{display:none}
+details.cat .cn{font-size:15px;font-weight:600;overflow-wrap:anywhere}
+details.cat .cb{height:8px;border-radius:4px;background:var(--grid);overflow:hidden}
+details.cat .cb i{display:block;height:100%;background:var(--book);border-radius:4px}
+details.cat .cc{text-align:right;font-variant-numeric:tabular-nums;font-size:14px;color:var(--ink2)}
+details.cat>summary .ico{color:var(--mute);transition:transform .15s}
+details.cat[open]>summary .ico{transform:rotate(90deg)}
+details.cat ul{margin:0 0 10px;padding:0;list-style:none}
+details.cat li{font-size:15px;padding:5px 0;overflow-wrap:anywhere}
+details.cat li small{color:var(--mute);font-size:13px}
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;background:color-mix(in srgb,var(--card) 92%,transparent);
   -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:0 -1px 0 var(--ring);
   padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
@@ -165,6 +184,7 @@ nav.tabs a.on{color:var(--ink)}
   <a href="#today" data-tab="today"><svg class="ico" aria-hidden="true"><use href="#i-clock"/></svg>Today</a>
   <a href="#trends" data-tab="trends"><svg class="ico" aria-hidden="true"><use href="#i-chart"/></svg>Trends</a>
   <a href="#talks" data-tab="talks"><svg class="ico" aria-hidden="true"><use href="#i-huxley"/></svg>Talks</a>
+  <a href="#books" data-tab="books"><svg class="ico" aria-hidden="true"><use href="#i-book"/></svg>Books</a>
 </nav>
 <script>
 "use strict";
@@ -179,6 +199,7 @@ let busy = false;
 let dayToken = 0;
 let allStruggles = false;
 const STRUGGLES_SHOWN = 6;
+const openCats = new Set();  // shelf categories opened: kept across the minute's redraw
 
 function esc(v) {
   return String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -354,6 +375,48 @@ function talks(d) {
   return h;
 }
 
+/* --- Books (T1.45): what he reads, has read and can be offered --- */
+function books(d) {
+  const b = d.books || {reading: [], finished: [], dropped: [], shelf: null};
+  let h = `<section class="card"><div class="lab">Reading now</div>`;
+  if (!b.reading.length) h += `<div class="sub mute">nothing started yet</div>`;
+  for (const r of b.reading) {
+    const bar = r.pct != null ? `<div class="prog"><i style="width:${Math.min(100, r.pct)}%"></i></div>` : "";
+    const ch = r.chapter != null && r.chapters ? `<span class="fig">ch ${r.chapter} of ${r.chapters}</span>` : "";
+    const heard = r.ago ? `<span class="fig">${esc(r.ago)} ago</span>` : "";
+    h += `<div class="bk"><span class="kind book">${ic("book")}</span><div class="mt"><div class="title">${esc(r.title)}${r.liked ? " &#9829;" : ""}</div>`
+      + `<div class="sub">${r.author ? `<span>${esc(r.author)}</span>` : ""}${ch}${heard}</div>${bar}</div></div>`;
+  }
+  h += `</section>`;
+
+  const chip = r => `<span class="chip${r.liked ? " liked" : r.disliked ? " nope" : ""}">${esc(r.title)}${r.liked ? " &#9829;" : ""}</span>`;
+  h += `<section class="card"><div class="row"><div class="lab">Finished</div><div class="val">${b.finished.length}</div></div>`;
+  h += b.finished.length ? `<div class="chips">${b.finished.map(chip).join("")}</div>` : `<div class="sub mute">none yet</div>`;
+  h += `</section>`;
+
+  if (b.dropped.length) {
+    h += `<section class="card"><div class="row"><div class="lab">Left halfway</div><div class="val">${b.dropped.length}</div></div>`;
+    h += `<div class="chips">${b.dropped.map(r => `<span class="chip off">${esc(r.title)}</span>`).join("")}</div>`;
+    h += `<div class="sub">not offered again</div></section>`;
+  }
+
+  const sh = b.shelf;
+  h += `<section class="card"><div class="lab">On the shelf</div>`;
+  if (!sh) {
+    h += `<div class="sub mute">no shelf yet</div></section>`;
+    return h;
+  }
+  h += `<div class="big">${sh.left} <span class="of">of ${sh.total} left</span></div><div class="sub">what the walkie can still recommend</div><div style="margin-top:10px">`;
+  for (const c of sh.categories) {
+    const pct = c.total ? (c.left.length / c.total * 100).toFixed(1) : 0;
+    const list = c.left.map(t => `<li>${esc(t.title)}${t.author ? ` <small>${esc(t.author)}</small>` : ""}</li>`).join("");
+    h += `<details class="cat" data-cat="${esc(c.name)}"${openCats.has(c.name) ? " open" : ""}><summary><span class="cn">${esc(c.name)}</span><span class="cb"><i style="width:${pct}%"></i></span><span class="cc">${c.left.length}/${c.total}</span>${ic("next")}</summary>`
+      + (list ? `<ul>${list}</ul>` : `<div class="sub mute" style="margin-bottom:10px">all heard</div>`) + `</details>`;
+  }
+  h += `</div></section>`;
+  return h;
+}
+
 /* One day's words: fetched every time, never stored (cache: no-store; the
    server says no-store too; the service worker never touches /day/). */
 async function day(date, at) {
@@ -391,7 +454,7 @@ function route() {
   const h = decodeURIComponent(location.hash.slice(1));
   const m = /^talks\/(\d{4}-\d{2}-\d{2})(?:@([\d.]+))?$/.exec(h);
   if (m) return {tab: "talks", date: m[1], at: m[2] != null ? parseFloat(m[2]) : null};
-  return {tab: ["today", "trends", "talks"].includes(h) ? h : "today"};
+  return {tab: ["today", "trends", "talks", "books"].includes(h) ? h : "today"};
 }
 function header() {
   if (!data) { upd.textContent = failed ? "not reachable" : ""; upd.className = "upd stale"; return; }
@@ -406,7 +469,7 @@ function render(scroll) {
   const r = route();
   for (const a of document.querySelectorAll("nav.tabs a")) a.classList.toggle("on", a.dataset.tab === r.tab);
   document.getElementById("back").hidden = !r.date;
-  if (!r.date || scroll) document.getElementById("title").textContent = r.date || {today: "Today", trends: "Trends", talks: "Talks"}[r.tab];
+  if (!r.date || scroll) document.getElementById("title").textContent = r.date || {today: "Today", trends: "Trends", talks: "Talks", books: "Books"}[r.tab];
   header();
   if (r.date) {
     if (scroll) day(r.date, r.at);
@@ -416,9 +479,13 @@ function render(scroll) {
   if (!data || data.error || !data.today) {
     view.innerHTML = `<section class="card"><div class="sub mute">${failed ? "not reachable" : data && data.error ? "watcher error: " + esc(data.error) : "loading"}</div></section>`;
   } else {
-    view.innerHTML = r.tab === "trends" ? trends(data) : r.tab === "talks" ? talks(data) : today(data);
+    view.innerHTML = r.tab === "trends" ? trends(data) : r.tab === "talks" ? talks(data)
+      : r.tab === "books" ? books(data) : today(data);
     const more = document.getElementById("more");
     if (more) more.addEventListener("click", () => { allStruggles = true; render(false); });
+    for (const el of view.querySelectorAll("details.cat")) {
+      el.addEventListener("toggle", () => { if (el.open) openCats.add(el.dataset.cat); else openCats.delete(el.dataset.cat); });
+    }
   }
   if (scroll) window.scrollTo(0, 0);
 }
