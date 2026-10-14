@@ -1110,9 +1110,14 @@ def _document(interval: str, body: str) -> str:
 """
 
 
+# Where alerts go, as the footer says it. The Telegram bot was dropped for
+# ntfy on 2026-10-13; the footer kept saying "log only" with phone alerts on.
+_ALERTS_LABEL = {"telegram": "Alerts: Telegram", "ntfy": "Alerts: to your phone (ntfy)"}
+
+
 def render(status: dict[str, Any]) -> str:
     opening, interval = _head(status)
-    alerts = "Alerts: Telegram" if status["alerts"] == "telegram" else "Alerts: log only"
+    alerts = _ALERTS_LABEL.get(status["alerts"], "Alerts: log only")
     logs_from = f"Logs since {status['logs_from']}" if status.get("logs_from") else ""
     month = status["books"]["month"]
     legend_today = _legend(

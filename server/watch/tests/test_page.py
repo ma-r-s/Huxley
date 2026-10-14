@@ -548,3 +548,12 @@ def test_summaries_and_shelf_are_read_tolerantly(tmp_path: Path) -> None:
     shelf = read_shelf(shelf_file)
     assert shelf is not None and shelf.categories == ("novela", "otra") and len(shelf.books) == 2
     assert read_shelf(tmp_path / "missing.json") is None
+
+
+def test_the_footer_says_where_alerts_go() -> None:
+    """2026-10-14: alerts went to Mario's phone through ntfy while the
+    footer said "Alerts: log only"."""
+    status = status_for([])
+    assert "Alerts: log only" in visible_text(render(status))
+    status["alerts"] = "ntfy"
+    assert "Alerts: to your phone (ntfy)" in visible_text(render(status))
