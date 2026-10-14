@@ -437,13 +437,13 @@ _STRINGS: dict[str, dict[str, str]] = {
             "máximo 4096). Acórtalo o divídelo en varios mensajes."
         ),
         "accept_failed": ("Intente contestar la llamada de {display} pero falló la conexión."),
-        # Said once the call is already answered; the audio connects only
-        # after it has played. "Llamada de mario, contestando." made the
+        # Said while the call still rings; it is answered and bridged only
+        # after this has played. "Llamada de mario, contestando." made the
         # model call mario back ("already in a call") and apologise for
         # 17 s while the caller heard silence and hung up (2026-10-14).
         "answering": (
-            "[Aviso del sistema, no lo dijo el usuario: {display} está llamando "
-            "y la llamada ya quedó contestada.] Di en voz alta exactamente "
+            "[Aviso del sistema, no lo dijo el usuario: {display} está llamando; "
+            "la llamada se conecta en cuanto lo digas.] Di en voz alta exactamente "
             "«Te llama {display}.» No llames a ninguna herramienta."
         ),
         "call_no_longer_available": (
@@ -505,7 +505,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "accept_failed": "I tried to answer the call from {display} but the connection failed.",
         "answering": (
             "[System notice, not said by the user: {display} is calling and "
-            'the call is already answered.] Say out loud exactly "{display} '
+            'the call connects as soon as you say it.] Say out loud exactly "{display} '
             "is calling.\" Don't call any tool."
         ),
         "call_no_longer_available": (
@@ -571,7 +571,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "answering": (
             "[Avis du système, l'utilisateur ne l'a pas dit : {display} appelle "
-            "et l'appel est déjà décroché.] Dis à voix haute exactement "
+            "et l'appel se connecte dès que tu l'as dit.] Dis à voix haute exactement "
             "« {display} t'appelle. » N'appelle aucun outil."
         ),
         "call_no_longer_available": (
@@ -1218,13 +1218,15 @@ class TelegramSkill:
     async def _on_incoming_ring(self, user_id: int) -> None:
         """Called by the transport when an INCOMING_CALL update arrives.
 
-        Accepts immediately to preserve pytgcalls WebRTC audio quality --
-        delaying accept_call by even ~1s causes near-silent inbound audio
-        from the peer. Then announces the caller via inject_turn_and_wait,
-        which blocks until the LLM finishes speaking before returning. At
-        that point start_input_claim is safe: the LLM is done, so provider
-        suspend doesn't cut any speech off. Frames buffered in the inbound
-        queue during the announcement are flushed by peer_audio_chunks().
+        Announces the caller while the call still rings for them, then
+        accepts and bridges (Mario, 2026-10-14: the walkie answered first
+        and the caller sat in silence through the announcement, 8 s that
+        morning). Accept-first came from April 2026, when a ~1 s late
+        accept left the peer's audio near-silent (peer_mean_rms ~0.1);
+        the heartbeats' peer_mean_rms say whether that still holds.
+        inject_turn_and_wait returns once the announcement was heard, so
+        the claim never cuts it off; peer_audio_chunks() drops any frames
+        queued before the bridge.
         """
         assert self._logger is not None
         assert self._ctx is not None
@@ -1251,7 +1253,28 @@ class TelegramSkill:
 
         await self._logger.ainfo("telegram.inbound.ring", user_id=user_id, caller_name=display)
 
-        # Accept immediately -- any delay here degrades WebRTC inbound audio quality.
+        # Announce while it still rings for the caller, and wait until he
+        # has heard it, so start_input_claim never cuts it off. Briefly: the
+        # phone keeps ringing meanwhile (T1.44); BLOCK_BEHIND_COMMS so a
+        # stream the turn in progress starts doesn't win over it.
+        outcome = await self._ctx.inject_turn_and_wait(
+            self._t("answering", display=display),
+            priority=InjectPriority.BLOCK_BEHIND_COMMS,
+            expires_after=self._ANNOUNCE_WAIT,
+        )
+        if outcome is not InjectOutcome.DELIVERED:
+            self._pending_incoming = None
+            await self._miss_call(user_id, display, outcome, answered=False)
+            return
+
+        # Race: the caller hung up during the announcement (on_ring_cancelled
+        # cleared _pending_incoming and tells him).
+        if self._pending_incoming != user_id:
+            await self._logger.ainfo(
+                "telegram.inbound.ring_expired_before_accept", user_id=user_id
+            )
+            return
+
         self._active_contact_name = display
         try:
             if self._transport is not None:
@@ -1262,31 +1285,9 @@ class TelegramSkill:
             await self._logger.aexception("telegram.inbound.accept_failed", user_id=user_id)
             await self._ctx.inject_turn(self._t("accept_failed", display=display))
             return
-
-        # Race: caller hung up in the narrow window before accept_call set
-        # _active_user_id (on_ring_cancelled clears _pending_incoming).
-        if self._pending_incoming != user_id:
-            await self._logger.ainfo(
-                "telegram.inbound.ring_expired_before_accept", user_id=user_id
-            )
-            return
         self._pending_incoming = None
 
         await self._logger.ainfo("telegram.inbound.call_accepted", user_id=user_id, name=display)
-
-        # Announce the caller and wait until the user has heard it, so
-        # start_input_claim never cuts the announcement off. The call is
-        # already accepted and the caller hears silence meanwhile, so it
-        # waits for a listener only briefly (T1.44); BLOCK_BEHIND_COMMS so
-        # a stream the turn in progress starts doesn't win over it.
-        outcome = await self._ctx.inject_turn_and_wait(
-            self._t("answering", display=display),
-            priority=InjectPriority.BLOCK_BEHIND_COMMS,
-            expires_after=self._ANNOUNCE_WAIT,
-        )
-        if outcome is not InjectOutcome.DELIVERED:
-            await self._miss_call(user_id, display, outcome)
-            return
 
         # Bridge audio. peer_audio_chunks() flushes frames buffered during the
         # announcement window so playback is real-time, not offset by ~3s.
@@ -1315,12 +1316,14 @@ class TelegramSkill:
                 )
             self._active_contact_name = None
 
-    # How long an accepted call's announcement waits for someone to hear
-    # it (the walkie away, a long answer in progress). The caller hears
-    # silence meanwhile; a server restart reconnects the walkie in ~3 s.
+    # How long a ringing call's announcement waits for someone to hear it
+    # (the walkie away, a long answer in progress). The caller hears it
+    # ring meanwhile; a server restart reconnects the walkie in ~3 s.
     _ANNOUNCE_WAIT = timedelta(seconds=30)
 
-    async def _miss_call(self, user_id: int, display: str, outcome: InjectOutcome) -> None:
+    async def _miss_call(
+        self, user_id: int, display: str, outcome: InjectOutcome, *, answered: bool = True
+    ) -> None:
         """Nobody heard the announcement in time: hang up rather than bridge
         the caller to nobody, and tell the user once someone can hear it."""
         assert self._logger is not None
@@ -1334,7 +1337,10 @@ class TelegramSkill:
         self._active_contact_name = None
         if self._transport is not None:
             try:
-                await self._transport.end_call()
+                if answered:
+                    await self._transport.end_call()
+                else:
+                    await self._transport.reject_call(user_id)
             except TransportError:
                 await self._logger.aexception("telegram.inbound.end_call_failed", user_id=user_id)
         await self._ctx.inject_turn(
@@ -1352,7 +1358,8 @@ class TelegramSkill:
         assert self._logger is not None
         assert self._ctx is not None
 
-        name = self._user_id_to_name.get(user_id, self._t("the_caller"))
+        known = self._user_id_to_name.get(user_id)
+        name = _spoken_name(known) if known else self._t("the_caller")
         await self._logger.ainfo(
             "telegram.inbound.ring_cancelled", user_id=user_id, caller_name=name
         )

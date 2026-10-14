@@ -729,7 +729,7 @@ class TestInbound:
         assert transport.on_ring_cancelled is not None
 
     @pytest.mark.asyncio
-    async def test_ring_known_contact_accepts_then_announces_and_bridges(
+    async def test_ring_known_contact_announces_then_accepts_and_bridges(
         self, tmp_path: Path
     ) -> None:
         captured: list[StubTransport] = []
@@ -774,9 +774,11 @@ class TestInbound:
 
         await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
-        # Accept fires BEFORE announcement (accept-first ordering preserves WebRTC quality).
-        assert accept_order == ["accept", "turn"], (
-            f"expected accept before turn, got {accept_order}"
+        # The announcement plays while it still rings, then the call is
+        # answered (Mario, 2026-10-14: answer-first left the caller in
+        # silence through the announcement).
+        assert accept_order == ["turn", "accept"], (
+            f"expected the announcement before the accept, got {accept_order}"
         )
         assert transport.accepted_calls == [111]
         assert len(turns) == 1
@@ -880,6 +882,37 @@ class TestInbound:
         assert "mario" in turns[0].lower()
 
     @pytest.mark.asyncio
+    async def test_a_hang_up_during_the_announcement_is_never_answered(
+        self, tmp_path: Path
+    ) -> None:
+        """Announce-first means the caller can give up while it plays: then
+        the walkie must not answer a dead call or open the bridge."""
+        import dataclasses
+
+        captured: list[StubTransport] = []
+
+        def factory(**kwargs: Any) -> StubTransport:
+            t = StubTransport(**kwargs)
+            t.resolve_map = {"+573000000073": 111}
+            captured.append(t)
+            return t
+
+        claims: list[InputClaim] = []
+        base_ctx, _ = _build_ctx(self._inbound_config(), tmp_path, captured_claims=claims)
+        skill = TelegramSkill(transport_factory=factory)
+
+        async def hung_up_meanwhile(prompt: str, **kwargs: Any) -> InjectOutcome:
+            await skill._on_ring_cancelled(111)  # type: ignore[attr-defined]
+            return InjectOutcome.DELIVERED
+
+        ctx = dataclasses.replace(base_ctx, inject_turn_and_wait=hung_up_meanwhile)
+        await skill.setup(ctx)
+        await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
+
+        assert captured[0].accepted_calls == []
+        assert claims == []
+
+    @pytest.mark.asyncio
     async def test_ring_accept_error_injects_turn_and_no_claim(self, tmp_path: Path) -> None:
         from huxley_skill_telegram.transport import TransportError
 
@@ -901,10 +934,11 @@ class TestInbound:
 
         await skill._on_incoming_ring(111)  # type: ignore[attr-defined]
 
-        # Accept fails before announcement -- only the error turn fires, no bridge.
+        # Announced, then the accept fails: the error turn follows, no bridge.
         assert len(claims) == 0
-        assert len(turns) == 1
-        assert "falló" in turns[0].lower()  # error
+        assert len(turns) == 2
+        assert "«Te llama Mario.»" in turns[0]
+        assert "falló" in turns[1].lower()  # error
 
     @pytest.mark.asyncio
     async def test_a_rate_limit_still_recognises_cached_contacts(self, tmp_path: Path) -> None:
@@ -1941,9 +1975,9 @@ class TestWaitingForAListener:
     async def test_an_unheard_call_announcement_hangs_up_and_tells_the_user_later(
         self, tmp_path: Path
     ) -> None:
-        """The walkie is away: the call is already accepted, the caller hears
-        silence. After 30 s unheard, hang up rather than bridge to nobody,
-        and queue a missed-call turn that waits until someone can hear it."""
+        """The walkie is away: the call rings while the announcement waits.
+        After 30 s unheard, decline it rather than answer into nobody, and
+        queue a missed-call turn that waits until someone can hear it."""
         import dataclasses
         from datetime import timedelta
 
@@ -1968,8 +2002,8 @@ class TestWaitingForAListener:
         assert announce["wait"] is True
         assert announce["priority"] == InjectPriority.BLOCK_BEHIND_COMMS
         assert announce["expires_after"] == timedelta(seconds=30)
-        assert captured[0].accepted_calls == [111]
-        assert captured[0].ended_calls == 1, "hung up instead of bridging to nobody"
+        assert captured[0].accepted_calls == [], "never answered into nobody"
+        assert captured[0].rejected_calls == [111]
         assert claims == []
         assert "mario" in missed["prompt"].lower()
         assert missed["priority"] == InjectPriority.BLOCK_BEHIND_COMMS
