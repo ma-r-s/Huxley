@@ -90,5 +90,6 @@ module = [
     "ntgcalls.*",
     "dateutil.*",
     "opuslib_next.*",  # no type hints; wrapped by huxley.server.opus_codec
+    "lxml.*",  # no type hints; the search skill's page extraction (T1.48)
 ]
 ignore_missing_imports = true

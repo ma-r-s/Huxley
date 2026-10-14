@@ -1,14 +1,14 @@
 # huxley-skill-search
 
-Web search for [Huxley](https://github.com/ma-r-s/Huxley) via DuckDuckGo. Free, no API key, in-memory cache, circuit-breaker.
+Web search for [Huxley](https://github.com/ma-r-s/Huxley): [`ddgs`](https://pypi.org/project/ddgs/) metasearch with backend fallback, fresh Google News headlines, and excerpts of the best pages. Free, no API key, in-memory cache, circuit-breaker.
 
 > **Status**: bundled with the Huxley repo as a workspace member. The first first-party skill to adopt T1.14's `config_schema` convention — a useful reference for skill authors.
 
 ## What it does
 
-- **`search_the_web`** — "search for..." / "look up..." / "what is..." — runs a DuckDuckGo query via the [`ddgs`](https://pypi.org/project/ddgs/) package and returns the top hits as structured JSON for the LLM to narrate.
+- **`search_the_web`**: for anything that may have changed since the model's training. Runs a web search through `ddgs` (Yandex, then Yahoo, then ddgs's own mix, inside 8 s), asks Google News and a news search for fresh articles in parallel, fetches the top pages within 2.5 s and returns compact JSON: `today`, matching `headlines`, and `results` with source, date, snippet and, for the best two, an excerpt of the page.
 
-In-memory TTL cache for repeated identical queries within a session. Consecutive-failure circuit breaker: opens for ~60s on N back-to-back failures so a DDG outage doesn't make every query hang for 4s.
+In-memory TTL cache for repeated identical queries within a session. Consecutive-failure circuit breaker: opens for ~60s after 3 failed searches in a row. Full behavior, measurements and events: [`docs/skills/search.md`](../../../docs/skills/search.md).
 
 ## Configure
 
@@ -16,6 +16,9 @@ In-memory TTL cache for repeated identical queries within a session. Consecutive
 skills:
   search:
     safesearch: "moderate" # off | moderate | strict
+    region: co-es # country-language; picks the Google News edition (default wt-wt: none)
+    timezone: America/Bogota # what "today" means
+    preferred_domains: [eltiempo.com, elespectador.com] # ranked up one place
     sounds_path: "sounds"
     start_sound: search_start # opt-in chime
 ```
@@ -38,11 +41,11 @@ config_schema = {
 }
 ```
 
-v2's PWA Skills panel will render that into a single dropdown with help text. The other config fields (`start_sound`, `sounds_path`) are persona-author / framework-shared plumbing and stay un-schemaed.
+(plus `region`, a pattern-checked string). v2's PWA Skills panel will render those with help text. The other config fields (`timezone`, `preferred_domains`, `start_sound`, `sounds_path`) are persona-author / framework-shared plumbing and stay un-schemaed.
 
 ## Requirements
 
-- Network access to `duckduckgo.com`.
+- Network access to the search engines ddgs uses, `news.google.com`, and the result pages.
 - No API key.
 
 ## Development

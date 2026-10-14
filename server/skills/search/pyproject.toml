@@ -1,12 +1,12 @@
 [project]
 name = "huxley-skill-search"
-version = "0.1.0"
-description = "Web search for Huxley via DuckDuckGo — free, no API key, in-memory cache, circuit-breaker."
+version = "0.2.0"
+description = "Web search for Huxley: ddgs metasearch with fallback, Google News headlines, page excerpts. Free, no API key."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "Mario Ruiz", email = "marioalejandroruizsarmiento@gmail.com" }]
-keywords = ["huxley", "voice-agent", "skill", "search", "duckduckgo"]
+keywords = ["huxley", "voice-agent", "skill", "search", "ddgs", "google-news"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -16,6 +16,8 @@ classifiers = [
 dependencies = [
     "huxley-sdk>=0.1.1,<0.2",
     "ddgs>=9.0",
+    "httpx>=0.27",  # page excerpts + Google News headlines (BSD-3)
+    "lxml>=5.0",  # page text extraction; already a ddgs dependency (BSD-3)
 ]
 
 [project.entry-points."huxley.skills"]
