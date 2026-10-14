@@ -5785,7 +5785,7 @@ Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd
 
 ## T1.45: A book recommender that only offers well-known books
 
-**Status**: `in_progress` (2026-10-13): code, docs and the page/app views built on branches `t145-shelf` and `t145-page-books`; `shelf.json` waits for Spotify's `/audiobooks` block to lift (about 17:30 Bogota, 2026-10-14), then the merge, the deploy and Mario's walkie smoke · **Effort**: M (one skill, a build script, the persona, the page card; no framework change)
+**Status**: `in_progress` (2026-10-14): merged and deployed with a 98-book shelf built search-only overnight; Spotify holds `/search` until about 08:13 and `/audiobooks` until about 17:27 Bogota; the 17:47 run adds the last 36 books and checks every edition's chapters; then Mario's walkie smoke · **Effort**: M (one skill, a build script, the persona, the page card; no framework change)
 
 **Problem** (Mario, 2026-10-13): make book search work as a recommender for his grandfather, never offering obscure or invented books; a list of well-known books to pick from; a books section on the page (recommended, in progress, read). His calls: never mention length; treat AI-voiced editions like human ones; pick the books with the API and judgement ("no idea on his favorites").
 
@@ -5848,7 +5848,7 @@ Run on the Pi, search only (the branch's files copied to `/tmp`, nothing of the 
 - **Run 2**: the edition-note rule rejected three pinned editions as abridged (1984, El tiempo entre costuras, Doña Bárbara: unpinned so the build picks a full one); stopped at about book 130 by a 429 its 30 s cap couldn't wait out, and wrote nothing (the old rule).
 - **Run 3**: blocked from the first book. `/v1/audiobooks/{id}` and its chapters answer `429 Retry-After: 68658` (about 19 hours); `/v1/search` answers 200. Cause: the curator's probes plus four full runs in three hours, each paging every chapter of every chosen edition. The live skill shares the app, so until the block lifts books play but are treated like music (no chapter commands, no end-of-book line; `spotify.book_info_failed`); grandpa doesn't have the walkie yet. Fixed in the build: one `/audiobooks` request per edition, none for an edition the previous shelf.json has, a stopped run keeps what it checked, 3 retries up to 2 minutes.
 
-`shelf.json` is not built yet: one run after the block lifts (about 17:30 Bogota, 2026-10-14), then the deploy.
+- **Overnight, 2026-10-14** (Mario's handover is in the morning, before `/audiobooks` reopens): the build gained `--search-only` (no `/audiobooks` request; books written `chapters_checked: false`, checked by the next normal run) and the client a per-API hold on `Retry-After`. Run 4 (search only, 1 s pacing) checked 100 books, kept 98 (Doña Bárbara and El tiempo entre costuras: only abridged editions on Spotify), then **Spotify rate-limited `/search` too** (`Retry-After: 25997`, until about 08:13 Bogota); the run kept what it had (98 books, 7 categories; the last four categories come with the afternoon run). During the search hold the walkie can't find songs or books by name (it says so and offers the radio); shelf books play fully (no Web API needed). The afternoon run paces at 4 s.
 
 ### Tests (Gate 3)
 
@@ -5862,7 +5862,7 @@ Spotify suite 229 passed, 1 skipped (main: 126), the review round's 9 included. 
 
 Branch `t145-shelf` (worktree) on main 8af68aa4: the skill, the build, the shelf source, the persona and the docs (this commit); `shelf.json` after the block lifts. Branch `t145-page-books`: 24c673d4 (the page's Books card), 92f1de4b (merge of main), 21e932da (the phone app's Books tab). Not merged, not deployed.
 
-**Lessons**: a background agent stopped by an interrupt sends no notice; check agents after any interrupt. Spotify rations `/audiobooks` for a development-mode app far below what a "verify everything" build spends: measure the request count of a batch job before running it twice.
+**Lessons**: a background agent stopped by an interrupt sends no notice; check agents after any interrupt. A development-mode Spotify app has a small budget across the whole Web API: five full builds in six hours cost both `/audiobooks` (19 h) and `/search` (7 h), and search is what the live walkie needs. Pace batch jobs at 4 s or more and fix one book with `--only`. Spotify rations `/audiobooks` for a development-mode app far below what a "verify everything" build spends: measure the request count of a batch job before running it twice.
 
 ## T1.46: A phone app of how grandpa uses the walkie
 
