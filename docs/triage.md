@@ -6139,7 +6139,7 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 
 **Commits**: e8117a96 (four device sounds), a4e1cffc (glass startup, docs, this entry), 11d9ad4a (shipped set, T1.50 queued), 8af68aa4 (loudness test for the device sounds); firmware 3c3ba563 (F-0033).
 
-**Startup light** (F-0034, Mario's pick from a mockup of the back with the real LED positions, 2026-10-13): the 7-LED ring is mirror-symmetric left/right in HX-1 (LED 0 points down); "Orbit" in warm white at power on, two arms climbing from the bottom to the top pair as the chime ends; while the lever is held, white light that climbs with his voice (a steady glow when offline). Same boot rule as the sound; a third of the brightness at night. Firmware ea106a69 + dda50f32.
+**Startup light** (F-0034): the 7-LED ring is mirror-symmetric left/right in HX-1 (LED 0 position points down; the data chain starts at the 102.9 deg LED and runs clockwise, fixed in 8d3b30bf after a sideways first Orbit). Mario first picked "Orbit" in warm white from a mockup of the back, then changed direction on the walkie (2026-10-14, with the firmware session): startup is "Rainbow", every LED its own hue turning, the whole ring at once, from when the chime reaches the speaker; talking varies the intensity of all seven together (white, faint when silent, full at loud speech; a steady glow when offline). The four LEDs behind the holders get 3x gain (`led gain`). Same boot rule as the sound; a third of the brightness at night. Firmware b24eb0e9 (feature f41854bd).
 
 ## T1.50: Redesign the sound palette (Wii-inspired, many takes per sound)
 
