@@ -210,6 +210,7 @@ async def verify(
     verified: frozenset[str] = frozenset(),
     *,
     search_only: bool = False,
+    kept_uri: str | None = None,
 ) -> Verdict:
     """Find and check this book's edition. Raises SearchError when
     Spotify can't be reached (a 4xx on a pinned lookup is a REJECT).
@@ -242,6 +243,10 @@ async def verify(
             seen.extend(await search.audiobooks(entry.title, limit=SEARCH_LIMIT))
             pinned = next((m for m in seen if m.uri == entry.uri), None)
             if pinned is None:
+                if kept_uri:  # the last build had it: keep that, unchecked
+                    return Verdict(
+                        entry, "KEEP", "pinned uri not in the search results: kept as before"
+                    )
                 return Verdict(
                     entry, "REJECT", "pinned uri not in the search results (search only)"
                 )
@@ -274,7 +279,8 @@ async def verify(
     # by chapter: El juego del angel's first edition, 2026-10-13). A pinned
     # one is the only choice: a human picked it.
     if search_only:
-        first = ranked[0]
+        # An edition an earlier run found with chapters first (T1.45 review).
+        first = next((m for m in ranked if m.uri in chapters), ranked[0])
         return _verdict(entry, note, first, kept, [], first.uri in chapters)
     chosen: Match | None = None
     empty: list[str] = []
@@ -340,8 +346,8 @@ def shelf_entry(verdict: Verdict, language: str, today: str) -> dict[str, Any]:
 def _line(verdict: Verdict) -> str:
     entry = verdict.entry
     name = f"{entry.title} / {entry.author}"
-    if verdict.status == "REJECT":
-        return f"REJECT  {name}: {verdict.reason}"
+    if verdict.status in ("REJECT", "KEEP"):
+        return f"{verdict.status:<7} {name}: {verdict.reason}"
     chosen = verdict.chosen
     assert chosen is not None
     who = ", ".join(chosen.narrators) or "?"
@@ -452,7 +458,13 @@ async def build(
             previous = list(json.loads(plan.shelf_json.read_text(encoding="utf-8"))["books"])
         except (OSError, ValueError, KeyError, TypeError):
             print("the previous shelf.json can't be read: checking every edition", file=out)
-    # Editions an earlier run found with chapters (not a --search-only one).
+    # Every book the previous shelf had, and the editions an earlier run
+    # found with chapters (not a --search-only one).
+    listed = {
+        (fold(str(b.get("title"))), fold(str(b.get("author")))): str(b.get("uri"))
+        for b in previous
+        if b.get("uri")
+    }
     known = {
         (fold(str(b.get("title"))), fold(str(b.get("author")))): b.get("uri")
         for b in previous
@@ -462,16 +474,19 @@ async def build(
     stopped: SearchError | None = None
     try:
         for entry in picked:
-            uri = known.get((fold(entry.title), fold(entry.author)))
+            key = (fold(entry.title), fold(entry.author))
+            uri = known.get(key)
             verdict = await verify(
                 search,
                 entry,
                 plan.language,
                 frozenset({uri}) if isinstance(uri, str) else frozenset(),
                 search_only=search_only,
+                kept_uri=listed.get(key),
             )
-            verdicts[entry] = verdict
             print(_line(verdict), file=out, flush=True)
+            if verdict.status != "KEEP":  # KEEP: the previous entry stays
+                verdicts[entry] = verdict
             await asyncio.sleep(PAUSE_S)
     except SearchError as exc:
         stopped = exc
@@ -515,7 +530,8 @@ async def build(
         )
     if write:
         today = datetime.now(UTC).date().isoformat()
-        books = merged_books(entries, verdicts, previous if only else [], plan.language, today)
+        keep = only or search_only  # books not (re)checked stay as before
+        books = merged_books(entries, verdicts, previous if keep else [], plan.language, today)
         if not books:
             print("no book passed: nothing written", file=out)
             return 1

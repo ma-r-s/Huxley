@@ -252,7 +252,7 @@ Asking for books ends whatever was playing (`CancelMedia`): it stays
 paused at its place instead of coming back over the offer (2026-10-14:
 after each list the last book resumed, "¿Cuál pongo?" included); "sigue
 con el libro" continues it. A book in general ("pon un libro", "ponme
-algo para escuchar") is choosing, not continuing: the tool text sends it
+algo para leer") is choosing, not continuing: the tool text sends it
 to `find_books` with no arguments, which names the kinds of book and the
 one in progress.
 

@@ -1002,6 +1002,30 @@ class TestMusicAndBooksApart:
         assert ended["book"] == "Cien años de soledad" and ended["book_info"] is False
         assert _events_named(skill, "spotify.book_without_chapters")
 
+    async def test_a_resume_without_chapters_never_writes_an_empty_title(
+        self, tmp_path: Path, pcm_server: PcmServer, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1.45 review: a resume while Spotify won't give chapters, with a
+        different last book in memory, saved the book under "". It takes
+        the title from the shelf, and writes nothing when nobody knows it."""
+        monkeypatch.setattr(skill_module, "PLAYED_AFTER_MS", 100)
+        pcm_server.hold_open.set()
+        path = write_shelf(tmp_path / "shelf.json")
+        skill, client, _, memory = await _skill(
+            tmp_path, pcm_server, config={"book_shelf": str(path)}
+        )
+        skill._search.books.clear()  # type: ignore[union-attr]
+        await memory.set_last_book("spotify:show:otro", "Otro libro", "Alguien")
+        client.state.context_uri = "spotify:show:sabueso"  # the shelf's Baskerville
+        await _take(skill._stream(), 3)  # a resume: no request
+        await _settle()
+        assert (await memory.last_book() or {}).get("title") == "El sabueso de los Baskerville"
+        client.state.context_uri = "spotify:show:nadie"  # nobody knows this one
+        await _take(skill._stream(), 3)
+        await _settle()
+        assert (await memory.last_book() or {}).get("title") == "El sabueso de los Baskerville"
+        assert not await memory.played("spotify:show:nadie")
+
     async def test_pon_musica_after_a_book_plays_the_last_music(
         self, tmp_path: Path, pcm_server: PcmServer
     ) -> None:
@@ -1379,9 +1403,13 @@ class TestTheShelf:
         from huxley_sdk import CancelMedia
 
         skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
-        for args in ({}, {"query": "misterio"}, {"more": True}, {"query": "dragones"}):
+        for args in ({}, {"query": "misterio"}, {"more": True}):
             result = await skill.handle("find_books", args)
             assert isinstance(result.side_effect, CancelMedia), args
+        # Nothing to choose from ("no tengo libros de eso"): what was
+        # playing comes back as after any question (T1.45 review).
+        nothing = await skill.handle("find_books", {"query": "dragones"})
+        assert nothing.side_effect is None
 
     async def test_any_book_is_choosing_not_continuing(self) -> None:
         """ "Ponme un libro" resumed the last book instead of offering one."""

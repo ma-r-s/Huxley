@@ -432,6 +432,32 @@ class TestSearchOnly:
         code, said = await _run(plan, search, search_only=True, write=False)
         assert code == 1 and "pinned uri not in the search results (search only)" in said
 
+    async def test_a_pinned_edition_missing_from_search_keeps_the_last_entry(
+        self, tmp_path: Path
+    ) -> None:
+        plan = _plan(tmp_path, [_entry("El extranjero", uri="spotify:show:fijo")])
+        pinned = _book("fijo", "El extranjero")
+        assert (await _run(plan, FakeSearch({}, pinned={pinned.uri: pinned})))[0] == 0
+        later = FakeSearch({"El extranjero Albert Camus": [_book("otro", "El extranjero")]})
+        later.fail_lookups = True
+        code, said = await _run(plan, later, search_only=True)
+        assert "KEEP" in said and code == 0
+        built = parse_shelf(json.loads(plan.shelf_json.read_text(encoding="utf-8")))
+        assert [b.uri for b in built.books] == ["spotify:show:fijo"]
+
+    async def test_search_only_prefers_an_edition_known_to_have_chapters(
+        self, tmp_path: Path
+    ) -> None:
+        plan = _plan(tmp_path, [_entry("El extranjero")])
+        vacio, lleno = _book("vacio", "El extranjero"), _book("lleno", "El extranjero")
+        results = {"El extranjero Albert Camus": [vacio, lleno]}
+        assert (await _run(plan, FakeSearch(results, empty={vacio.uri})))[0] == 0
+        later = FakeSearch(results)
+        later.fail_lookups = True
+        assert (await _run(plan, later, search_only=True))[0] == 0
+        built = json.loads(plan.shelf_json.read_text(encoding="utf-8"))
+        assert built["books"][0]["uri"] == lleno.uri
+
     async def test_the_next_full_run_checks_what_search_only_left(self, tmp_path: Path) -> None:
         plan = _plan(tmp_path, [_entry("El extranjero"), _entry("La peste")])
         results = {

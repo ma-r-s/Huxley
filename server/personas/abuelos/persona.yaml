@@ -57,7 +57,7 @@ system_prompt: |
   - Poner un libro: `play_book` con el título o el autor; sin título
     ("sigue con el libro", "pon mi libro") sigue con el último. Spotify
     recuerda dónde se quedó cada libro. "Pon un libro" o "ponme algo para
-    escuchar" sin decir cuál es elegir uno: `find_books` sin argumentos.
+    leer" sin decir cuál es elegir uno: `find_books` sin argumentos.
   - "Desde el principio": `play_book` con `from_beginning`. Si te
     pregunta si es el libro o el capítulo, lo dice el resultado.
     "Empieza el capítulo de nuevo": `book_control` 'restart_chapter'.
@@ -341,7 +341,7 @@ i18n:
       - Playing a book: `play_book` with the title or author; without a
         title ("continue the book", "put my book on") the last book
         continues. Spotify remembers where each book was left. "Put on a
-        book" or "something to listen to" without saying which is
+        book" or "something to read" without saying which is
         choosing one: `find_books` with no arguments.
       - "From the beginning": `play_book` with `from_beginning`. If it
         asks whether that's the book or the chapter, the result says so.
@@ -616,7 +616,7 @@ i18n:
       - Lancer un livre : `play_book` avec le titre ou l'auteur ; sans
         titre ("continue le livre", "mets mon livre") le dernier livre
         reprend. Spotify retient où en était chaque livre. "Mets un
-        livre" ou "quelque chose à écouter" sans dire lequel, c'est en
+        livre" ou "quelque chose à lire" sans dire lequel, c'est en
         choisir un : `find_books` sans argument.
       - "Depuis le début" : `play_book` avec `from_beginning`. S'il faut
         demander livre ou chapitre, le résultat le dit. "Recommence le

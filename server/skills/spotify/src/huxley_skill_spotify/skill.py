@@ -430,6 +430,18 @@ def _ordinal(spoken: str, count: int) -> int | None:
     return None
 
 
+def _offered(output: str) -> bool:
+    """A find_books answer that offers something to choose: books or kinds
+    of book."""
+    try:
+        data = json.loads(output)
+    except ValueError:
+        return False
+    return bool(
+        isinstance(data, dict) and data.get("ok") and (data.get("books") or data.get("categories"))
+    )
+
+
 def _first_sentence(text: str, limit: int = 200) -> str:
     """The start of a book's description, enough to say what it's about."""
     text = " ".join(text.split())
@@ -728,12 +740,13 @@ class SpotifySkill:
                     more=bool(args.get("more")),
                     listened=bool(args.get("listened")),
                 )
-                # Choosing a book: what was playing stays paused at its place
-                # instead of coming back over the offer (2026-10-14: after
-                # each list the last book resumed, "¿Cuál pongo?" included).
-                return ToolResult(
-                    output=found.output, side_effect=found.side_effect or CancelMedia()
-                )
+                # Choosing from an offer: what was playing stays paused at its
+                # place instead of coming back over it (2026-10-14: after each
+                # list the last book resumed, "¿Cuál pongo?" included). When
+                # nothing was offered, it comes back as after any question.
+                if found.side_effect is None and _offered(found.output):
+                    return ToolResult(output=found.output, side_effect=CancelMedia())
+                return found
             case "book_opinion":
                 return await self._book_opinion(
                     str(args.get("opinion") or ""), str(args.get("title") or "")
@@ -2334,9 +2347,10 @@ class SpotifySkill:
                 if ident is not None and not marked and audio_ms >= PLAYED_AFTER_MS:
                     marked = True
                     self._hours_ok_at = time.monotonic()
-                    memory = self._require_memory()
-                    self._spawn(memory.mark_played(*ident))
-                    self._spawn(memory.set_last_book(*ident))
+                    if ident[1]:  # never remember a book under an empty title
+                        memory = self._require_memory()
+                        self._spawn(memory.mark_played(*ident))
+                        self._spawn(memory.set_last_book(*ident))
                 yield chunk
             # The capture closed under us (the container's sound server is
             # down, or the container restarted). Behind Docker on a Mac the
@@ -2407,25 +2421,33 @@ class SpotifySkill:
         self, book: BookInfo | None, start: Match | None, client: SoloistClient
     ) -> tuple[str, str, str | None] | None:
         """(uri, title, author) of the book this stream plays: from its
-        chapters when Spotify gave them, else from the request or the last
-        book, so its listening is still counted and remembered."""
+        chapters when Spotify gave them, else from the request, the last
+        book, the shelf or what played before, so its listening is still
+        counted and remembered. The title may be "" when none of them
+        knows it: then nothing is written under it (T1.45 review)."""
         if book is not None:
             return book.uri, book.title, book.author
         uri = start.uri if start is not None else client.state.context_uri or ""
         if not _is_book(uri):
             return None
-        if start is not None:
-            ident = (uri, start.title, start.artist)
-        else:
-            last = await self._require_memory().last_book()
-            same = last is not None and last.get("uri") == uri
-            ident = (
-                uri,
-                str(last.get("title") or "") if same and last else "",
-                last.get("author") if same and last else None,
-            )
-        await self._log().awarning("spotify.book_without_chapters", uri=uri, title=ident[1])
-        return ident
+        title, author = (start.title, start.artist) if start is not None else ("", None)
+        memory = self._require_memory()
+        if not title:
+            last = await memory.last_book()
+            if last is not None and last.get("uri") == uri:
+                title, author = str(last.get("title") or ""), last.get("author")
+        if not title:
+            shelf = self._shelf_file.shelf if self._shelf_file else None
+            listed = shelf.by_uri(uri) if shelf else None
+            if listed is not None:
+                title, author = listed.title, listed.author
+        if not title:
+            for row in await memory.played_books(limit=1_000):
+                if row.get("uri") == uri:
+                    title, author = str(row.get("title") or ""), row.get("author")
+                    break
+        await self._log().awarning("spotify.book_without_chapters", uri=uri, title=title)
+        return uri, title, author
 
     def _unavailable(self) -> str | None:
         state = self._require_client().state
