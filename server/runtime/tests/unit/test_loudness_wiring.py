@@ -283,6 +283,26 @@ class TestShippedSoundsAreAtTheirTargets:
         assert true_peak_dbfs(pcm) <= TRUE_PEAK_CEILING_DBFS
         assert sample_peak_dbfs(pcm) <= WIRE_CEILING_DBFS
 
+    @pytest.mark.parametrize(
+        "path",
+        sorted((PERSONAS / "_shared" / "sounds" / "device").glob("*.wav")),
+        ids=lambda p: p.stem,
+    )
+    def test_device_sound(self, path: Path) -> None:
+        """The walkie's own status sounds (T1.49): the cue level, the
+        repeating `searching` tick 6 dB under. The synth scales a sound
+        down rather than past a peak ceiling, so up to 1.5 dB quiet is
+        allowed; never louder."""
+        target = CUE_TARGET_LUFS - (6.0 if path.stem == "searching" else 0.0)
+        pcm = _wav(path)
+        assert target - 1.5 <= momentary_max_lufs(pcm) <= target + 0.5
+        assert true_peak_dbfs(pcm) <= TRUE_PEAK_CEILING_DBFS
+        assert sample_peak_dbfs(pcm) <= WIRE_CEILING_DBFS
+
+    def test_device_sounds_are_all_there(self) -> None:
+        names = {p.stem for p in (PERSONAS / "_shared" / "sounds" / "device").glob("*.wav")}
+        assert names == {"startup", "searching", "connected", "lost"}
+
     def test_unavailable_clip(self) -> None:
         pcm = _wav(PERSONAS / "abuelos" / "sounds" / "unavailable.wav")
         assert integrated_lufs(pcm) == pytest.approx(PROGRAM_TARGET_LUFS, abs=0.5)
