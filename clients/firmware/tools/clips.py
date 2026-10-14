@@ -64,6 +64,8 @@ BOOK_CLIPS = [
     "Recuérdame tomar agua mañana a las ocho.",  # 8: a reminder, said back as a day
     "Cancela ese recordatorio.",  # 9
     "Para la música.",  # 10: stop what the rows started
+    "Quiero un libro de aventuras.",  # 11
+    "El segundo.",  # 12: the ordinal as a word
 ]
 TAIL_SILENCE_MS = 200
 
