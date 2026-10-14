@@ -159,6 +159,31 @@ Then end the walkie's session on the old account (Telegram > Settings >
 Devices), and have each contact send the new number one message: Telegram
 only lets the walkie recognise a caller who has written to it once.
 
+## The walkie's Wi-Fi from afar (T1.52)
+
+From the Mac, in your own terminal, while the walkie is online:
+
+```bash
+scripts/pi/wifi.sh add "Network name"     # asks for the password twice, hidden
+scripts/pi/wifi.sh forget "Old network"   # any network but the one in use
+scripts/pi/wifi.sh list                   # what the walkie knows
+```
+
+`add` saves the network on the walkie and tries it only if the walkie hears
+it now; one not on the air yet (a new router the home announced) waits
+until it is heard, so add it ahead of the change. If a try fails the walkie
+goes back to the network it was on and keeps the entry; a name it already
+knows takes the password as its second one. The walkie refuses while he is
+using it or while an update installs. Prefer the night: a try can take it
+off the air for up to two minutes (the script asks first in the daytime,
+and writes a bench window so the page doesn't alert). The answer is only
+`queued`; the result comes in the walkie's `wifi.add` log lines, which the
+script follows for two minutes. The password travels on stdin to
+`admin.sh dev-cmd line@-` and never sits in a command line, shell history
+or log. Needs firmware with F-0036; older firmware answers
+`console.wifi_addhex refused: USB console only`, and an offline walkie
+needs `clients/firmware/tools/wifi.py` over USB, on site.
+
 ## Outside check: removed (2026-10-14)
 
 A Cloudflare Worker, `huxley-walkie-deadman`, asked
