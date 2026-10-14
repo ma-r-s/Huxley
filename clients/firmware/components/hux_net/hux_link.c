@@ -150,3 +150,15 @@ bool hux_link_http_url(const char *ws_uri, const char *path, char *out, size_t c
     n = snprintf(out, cap, "%s%.*s%s", scheme, (int)len, authority, path);
     return n > 0 && (size_t)n < cap;
 }
+
+hux_link_fail_t hux_link_fail_kind(int error_type, int http_status) {
+    /* esp_websocket_error_type_t: 1 TCP_TRANSPORT, 2 PONG_TIMEOUT,
+     * 3 HANDSHAKE, 4 SERVER_CLOSE. */
+    if (http_status != 0 || error_type == 3 || error_type == 4) {
+        return HUX_LINK_FAIL_SERVER;
+    }
+    if (error_type == 1) {
+        return HUX_LINK_FAIL_INTERNET;
+    }
+    return HUX_LINK_FAIL_NONE;
+}

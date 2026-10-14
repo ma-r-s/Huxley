@@ -22,6 +22,20 @@
  * 45 to 60 s. */
 uint32_t hux_link_backoff_ms(uint32_t attempt, uint32_t r);
 
+/* Where the path to the server breaks (F-0039), from a WebSocket error:
+ * a transport error with no HTTP answer (DNS, TCP or TLS to Cloudflare,
+ * which always answers when there is internet) is the internet; any HTTP
+ * answer (a handshake status: the tunnel's 530, a 401) or the server
+ * closing is the server; a pong timeout tells nothing new (NONE: keep the
+ * last verdict). The error types are esp_websocket_client's. */
+typedef enum {
+    HUX_LINK_FAIL_NONE = 0,
+    HUX_LINK_FAIL_INTERNET,
+    HUX_LINK_FAIL_SERVER,
+} hux_link_fail_t;
+
+hux_link_fail_t hux_link_fail_kind(int error_type, int http_status);
+
 typedef enum {
     HUX_LADDER_NONE = 0,
     HUX_LADDER_WS,     /* restart the WebSocket client */

@@ -69,10 +69,11 @@ static int shipped_packets(const char *name) {
 /* The files the firmware embeds: each one whole, and short enough to say
  * while the walkie waits (a bad render must fail here, not on the walkie). */
 static void test_shipped_prompts_parse(void) {
-    const char *names[] = {"offline", "battery_empty", "updating"};
+    const char *names[] = {"offline", "battery_empty", "updating", "no_wifi", "no_internet"};
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         int packets = shipped_packets(names[i]);
-        HX_ASSERT_TRUE(packets > 10 && packets * 60 <= 6000, names[i]);
+        /* The help sentences run longer (no_wifi 10.5 s at the persona's pace). */
+        HX_ASSERT_TRUE(packets > 10 && packets * 60 <= 12000, names[i]);
     }
 }
 

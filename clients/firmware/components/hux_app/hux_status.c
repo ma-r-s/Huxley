@@ -153,3 +153,18 @@ const char *hux_status_updating_name(hux_status_updating_t why) {
         default:                   return "none";
     }
 }
+
+hux_status_offline_t hux_status_offline_kind(bool have_ip, bool internet_failed) {
+    if (!have_ip) {
+        return HUX_OFFLINE_NO_WIFI;
+    }
+    return internet_failed ? HUX_OFFLINE_NO_INTERNET : HUX_OFFLINE_SERVER;
+}
+
+const char *hux_status_offline_name(hux_status_offline_t kind) {
+    switch (kind) {
+        case HUX_OFFLINE_NO_WIFI:     return "no_wifi";
+        case HUX_OFFLINE_NO_INTERNET: return "no_internet";
+        default:                      return "offline";
+    }
+}

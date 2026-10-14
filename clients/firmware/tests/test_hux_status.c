@@ -289,6 +289,20 @@ static void test_updating_reasons(void) {
                    "named in the log");
 }
 
+/* F-0039: what an offline press says, from what the walkie knows. */
+static void test_offline_kind(void) {
+    HX_ASSERT_EQ(hux_status_offline_kind(false, false), HUX_OFFLINE_NO_WIFI,
+                 "no IP: his phone's hotspot");
+    HX_ASSERT_EQ(hux_status_offline_kind(false, true), HUX_OFFLINE_NO_WIFI,
+                 "no IP wins over an older internet verdict");
+    HX_ASSERT_EQ(hux_status_offline_kind(true, true), HUX_OFFLINE_NO_INTERNET,
+                 "an IP but nothing beyond: the phone has no data");
+    HX_ASSERT_EQ(hux_status_offline_kind(true, false), HUX_OFFLINE_SERVER,
+                 "internet works: our server (No tengo conexion)");
+    HX_ASSERT_TRUE(strcmp(hux_status_offline_name(HUX_OFFLINE_NO_INTERNET), "no_internet") == 0,
+                   "named in the log");
+}
+
 int main(void) {
     HX_RUN(test_power_on_startup_ticks_then_connected);
     HX_RUN(test_a_blip_is_silent);
@@ -307,5 +321,6 @@ int main(void) {
     HX_RUN(test_restart_keeps_an_owed_connected);
     HX_RUN(test_the_schedule_end_is_flagged_once);
     HX_RUN(test_updating_reasons);
+    HX_RUN(test_offline_kind);
     HX_SUMMARY();
 }

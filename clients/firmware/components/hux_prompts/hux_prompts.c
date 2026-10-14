@@ -23,6 +23,10 @@ extern const uint8_t lost_start[] asm("_binary_lost_hxp_start");
 extern const uint8_t lost_end[] asm("_binary_lost_hxp_end");
 extern const uint8_t updating_start[] asm("_binary_updating_hxp_start");
 extern const uint8_t updating_end[] asm("_binary_updating_hxp_end");
+extern const uint8_t no_wifi_start[] asm("_binary_no_wifi_hxp_start");
+extern const uint8_t no_wifi_end[] asm("_binary_no_wifi_hxp_end");
+extern const uint8_t no_internet_start[] asm("_binary_no_internet_hxp_start");
+extern const uint8_t no_internet_end[] asm("_binary_no_internet_hxp_end");
 
 static const struct {
     const char *name;
@@ -36,6 +40,8 @@ static const struct {
     [HUX_PROMPT_CONNECTED] = {"connected", connected_start, connected_end},
     [HUX_PROMPT_LOST] = {"lost", lost_start, lost_end},
     [HUX_PROMPT_UPDATING] = {"updating", updating_start, updating_end},
+    [HUX_PROMPT_NO_WIFI] = {"no_wifi", no_wifi_start, no_wifi_end},
+    [HUX_PROMPT_NO_INTERNET] = {"no_internet", no_internet_start, no_internet_end},
 };
 
 static int packets_of(hux_prompt_t id) {

@@ -66,6 +66,11 @@ PROMPTS = {
     "offline": "No tengo conexión. Lo sigo intentando.",
     "battery_empty": "Batería agotada. Ponme a cargar.",
     "updating": "Me estoy actualizando. Intenta otra vez en un minuto.",
+    "no_wifi": (
+        "No encuentro el internet de tu teléfono. Revisa que el teléfono tenga batería "
+        "y que la zona wifi esté prendida, o pídele ayuda a alguien."
+    ),
+    "no_internet": "Tu teléfono no me está dando internet. Revisa que tenga datos, o pídele ayuda a alguien.",
 }
 SOUNDS_DIR = ROOT / "server/personas/_shared/sounds/device"
 SOUNDS = (

@@ -108,6 +108,10 @@ void hux_net_server_reset(void);
  * hello (F-0037: a press then says the walkie is updating). */
 uint32_t hux_net_restart_close_age_ms(void);
 
+/** Where the path to the server broke last (hux_link_fail_t: NONE, INTERNET
+ * or SERVER), reset by each hello (F-0039). */
+int hux_net_link_fail(void);
+
 /** The app's hello arrived: a pending `server_keep` is saved; a fallback
  * stops alternating. */
 void hux_net_hello_ok(void);

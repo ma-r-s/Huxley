@@ -135,6 +135,17 @@ static void test_ladder_names(void) {
     HX_ASSERT_TRUE(hux_ladder_name((hux_ladder_step_t)99)[0] == 'n', "unknown: none");
 }
 
+/* F-0039: where the path to the server breaks, from a WebSocket error. */
+static void test_link_fail_kind(void) {
+    HX_ASSERT_EQ(hux_link_fail_kind(1, 0), HUX_LINK_FAIL_INTERNET,
+                 "transport error, no HTTP answer: DNS/TCP/TLS to Cloudflare: the internet");
+    HX_ASSERT_EQ(hux_link_fail_kind(3, 530), HUX_LINK_FAIL_SERVER, "the tunnel's 530: our server");
+    HX_ASSERT_EQ(hux_link_fail_kind(1, 502), HUX_LINK_FAIL_SERVER, "any HTTP answer: the server");
+    HX_ASSERT_EQ(hux_link_fail_kind(4, 0), HUX_LINK_FAIL_SERVER, "the server closed it");
+    HX_ASSERT_EQ(hux_link_fail_kind(2, 0), HUX_LINK_FAIL_NONE, "a pong timeout tells nothing new");
+    HX_ASSERT_EQ(hux_link_fail_kind(0, 0), HUX_LINK_FAIL_NONE, "no error type");
+}
+
 int main(void) {
     HX_RUN(test_backoff_starts_at_two_seconds);
     HX_RUN(test_backoff_doubles_to_a_minute);
@@ -148,5 +159,6 @@ int main(void) {
     HX_RUN(test_ladder_each_step_once);
     HX_RUN(test_ladder_late_check_takes_the_highest);
     HX_RUN(test_ladder_names);
+    HX_RUN(test_link_fail_kind);
     HX_SUMMARY();
 }

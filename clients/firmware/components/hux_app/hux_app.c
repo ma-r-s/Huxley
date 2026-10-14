@@ -577,11 +577,17 @@ static void enter_ptt(void) {
                             (uint32_t)(esp_timer_get_time() / 1000), hux_net_restart_close_age_ms());
     if (s_state != ST_READY || upd != HUX_UPDATING_NO) {
         bool updating = upd != HUX_UPDATING_NO;
+        /* Not updating: say where the path breaks, so he (or whoever he
+         * asks) knows what to check (F-0039): his phone's hotspot, its
+         * data, or our server (Mario's phone gets that alert). */
+        hux_status_offline_t kind = hux_status_offline_kind(
+            hux_net_have_ip(), hux_net_link_fail() == HUX_LINK_FAIL_INTERNET);
+        const char *which = updating ? "updating" : hux_status_offline_name(kind);
         ESP_LOGW(TAG, "app.ptt.ignored_press state=%s evicted=%d client_running=%d cue=%s",
-                 state_name(s_state), s_evicted, hux_net_is_running(),
-                 updating ? "updating" : "offline");
-        ESP_LOGI(TAG, "press.offline_prompt which=%s why=%s", updating ? "updating" : "offline",
-                 hux_status_updating_name(upd));
+                 state_name(s_state), s_evicted, hux_net_is_running(), which);
+        ESP_LOGI(TAG, "press.offline_prompt which=%s why=%s have_ip=%d link_fail=%d", which,
+                 updating ? hux_status_updating_name(upd) : "none", hux_net_have_ip(),
+                 hux_net_link_fail());
         /* Stop whatever is still playing (the ring can hold a whole reply
          * from before the drop), then the cue: a clear drops queued tones,
          * and tones only play once the ring is empty. */
@@ -594,6 +600,10 @@ static void enter_ptt(void) {
         hux_audio_spk_unhold("offline_cue");
         if (updating) {
             play_updating_cue();
+        } else if (kind == HUX_OFFLINE_NO_WIFI && hux_prompt_play(HUX_PROMPT_NO_WIFI)) {
+            /* said */
+        } else if (kind == HUX_OFFLINE_NO_INTERNET && hux_prompt_play(HUX_PROMPT_NO_INTERNET)) {
+            /* said */
         } else {
             play_offline_cue();
         }

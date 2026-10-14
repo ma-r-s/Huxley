@@ -96,6 +96,9 @@ static bool s_close_was_eviction = false;
  * reason): until the next hello a press says the walkie is updating
  * (F-0037). 0: none since the last hello. */
 static _Atomic uint32_t s_restart_close_ms = 0;
+/* Where the path to the server broke last (hux_link_fail_t, F-0039): the
+ * last WebSocket error's verdict, SERVER on a close frame, NONE on a hello. */
+static _Atomic int s_link_fail = HUX_LINK_FAIL_NONE;
 static char s_server_uri[128] = {0};
 /* Where a switch reverts to: the last address a hello proved (the saved
  * one, else the compiled one). */
@@ -1284,6 +1287,7 @@ static void note_close_frame(const esp_websocket_event_data_t *data) {
         memcpy(reason, data->data_ptr + 2, (size_t)n);
     }
     s_close_was_eviction = code == 1001 && strstr(reason, "Replaced") != NULL;
+    atomic_store(&s_link_fail, HUX_LINK_FAIL_SERVER); /* it was up: the server ended it */
     bool restart = code == 1012 || (code == 1001 && reason[0] == '\0');
     if (restart) {
         uint32_t now = now_ms();
@@ -1412,6 +1416,14 @@ static void ws_event_handler(void *arg, esp_event_base_t base,
             bool transport =
                 ev != NULL && ev->error_handle.error_type == WEBSOCKET_ERROR_TYPE_TCP_TRANSPORT;
             unsigned tls_err = transport ? (unsigned)ev->error_handle.esp_tls_last_esp_err : 0;
+            hux_link_fail_t fail =
+                ev != NULL ? hux_link_fail_kind((int)ev->error_handle.error_type,
+                                                ev->error_handle.esp_ws_handshake_status_code)
+                           : HUX_LINK_FAIL_NONE;
+            if (fail != HUX_LINK_FAIL_NONE &&
+                atomic_exchange(&s_link_fail, (int)fail) != (int)fail) {
+                ESP_LOGW(TAG, "ws.fail_kind %s", fail == HUX_LINK_FAIL_INTERNET ? "internet" : "server");
+            }
             if (tls_err != 0) {
                 health_count(s_h_tls, (int)tls_err);
             }
@@ -1779,6 +1791,10 @@ void hux_net_server_reset(void) {
     link_unlock();
 }
 
+int hux_net_link_fail(void) {
+    return atomic_load(&s_link_fail);
+}
+
 uint32_t hux_net_restart_close_age_ms(void) {
     uint32_t at = atomic_load(&s_restart_close_ms);
     return at == 0 ? UINT32_MAX : now_ms() - at;
@@ -1786,6 +1802,7 @@ uint32_t hux_net_restart_close_age_ms(void) {
 
 void hux_net_hello_ok(void) {
     atomic_store(&s_restart_close_ms, 0); /* back: no longer "updating" */
+    atomic_store(&s_link_fail, HUX_LINK_FAIL_NONE);
     if (s_ws == NULL) {
         return;
     }

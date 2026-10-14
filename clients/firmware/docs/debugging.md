@@ -486,8 +486,19 @@ reach the server: the restart would cut the answer), a new image booted
 and not yet accepted (for 3 min after boot at most), or the server's
 restart close in the last 90 s until the next hello (`1012`, or `1001`
 with no reason; `ws.rx.close code= reason= eviction= restart=`). Logs:
-`press.offline_prompt which=updating|offline why=ota|ota_pending|
-server_restart|none` next to `app.ptt.ignored_press ... cue=updating|offline`.
+`press.offline_prompt which=updating|no_wifi|no_internet|offline why=ota|
+ota_pending|server_restart|none have_ip= link_fail=` next to
+`app.ptt.ignored_press ... cue=`. Otherwise the press says where the path
+breaks (F-0039), so grandpa, or whoever he asks, knows what to check: no IP
+(his phone's hotspot off or out of reach) -> `no_wifi` "No encuentro el
+internet de tu teléfono. Revisa que el teléfono tenga batería y que la zona
+wifi esté prendida, o pídele ayuda a alguien." (10.5 s); an IP but the last
+server attempt broke below HTTP (DNS, TCP or TLS to Cloudflare, which always
+answers when there's internet) -> `no_internet` "Tu teléfono no me está
+dando internet. Revisa que tenga datos, o pídele ayuda a alguien." (6.9 s);
+an HTTP answer (the tunnel's 530) or the server closing -> "No tengo
+conexión" (Mario's phone gets that alert). `ws.fail_kind internet|server`
+logs each change of verdict; a hello resets it.
 
 ### Lights under the clear back (F-0034)
 
@@ -725,7 +736,8 @@ takes commands typed on the USB port: `talk` / `release`, `say <n>` (a
 whole turn: clip n from flash replaces the mic; `tools/clips.py`),
 `selftest` (a tone on the DAC read back electrically on the ES7210's
 echo-reference channel), `tone`, `prompt <name>` (a sentence or sound stored on
-the walkie, `offline`, `battery_empty`, `updating`, `startup`, `searching`,
+the walkie, `offline`, `battery_empty`, `updating`, `no_wifi`, `no_internet`,
+`startup`, `searching`,
 `connected` or `lost`; `prompt.play name= ms= queued=`), `status poweron`
 (the connection sounds as after a power on, F-0033), `led bright <pct>` /
 `led demo rainbow|voice` / `led walk` (the lights, F-0034), `opus yield on|off` / `opus flood <s>` (the decoder's

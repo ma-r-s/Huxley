@@ -29,6 +29,8 @@ typedef enum {
     HUX_PROMPT_CONNECTED,     /* sound: back with the server */
     HUX_PROMPT_LOST,          /* sound: the server has been gone 20 s */
     HUX_PROMPT_UPDATING,      /* "Me estoy actualizando. Intenta otra vez en un minuto." */
+    HUX_PROMPT_NO_WIFI,       /* "No encuentro el internet de tu telefono..." (F-0039) */
+    HUX_PROMPT_NO_INTERNET,   /* "Tu telefono no me esta dando internet..." (F-0039) */
     HUX_PROMPT_COUNT,
 } hux_prompt_t;
 

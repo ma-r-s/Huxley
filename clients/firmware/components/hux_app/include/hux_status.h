@@ -99,6 +99,18 @@ hux_status_updating_t hux_status_updating(bool ota_busy, bool image_pending, uin
                                           uint32_t restart_close_age_ms);
 const char *hux_status_updating_name(hux_status_updating_t why);
 
+/* -- Which "offline" a press hears (F-0039) ----------------------------- */
+
+typedef enum {
+    HUX_OFFLINE_SERVER = 0,  /* internet works, our server doesn't: "No tengo conexion" */
+    HUX_OFFLINE_NO_WIFI,     /* no IP: his phone's hotspot off or out of reach */
+    HUX_OFFLINE_NO_INTERNET, /* an IP, but nothing beyond it: the phone has no data */
+} hux_status_offline_t;
+
+/** `internet_failed`: the last attempt broke below HTTP (hux_link_fail_kind). */
+hux_status_offline_t hux_status_offline_kind(bool have_ip, bool internet_failed);
+const char *hux_status_offline_name(hux_status_offline_t kind);
+
 const char *hux_status_name(hux_status_sound_t sound);
 const char *hux_status_phase_name(hux_status_phase_t phase);
 
