@@ -217,7 +217,7 @@ function chapter(c) {
     const pct = Math.min(100, c.chapter_index / c.chapters * 100).toFixed(1);
     // The name as the book has it, and its place in the book's list (a
     // book's first entry is often its credits, so the two can differ).
-    return `<div class="prog"><i style="width:${pct}%"></i></div><div class="sub">${c.chapter ? `<span>${esc(c.chapter)}</span>` : ""}<span class="fig">${c.chapter_index} of ${c.chapters}</span></div>`;
+    return `<div class="prog"><i style="width:${pct}%"></i></div><div class="sub"><span>${c.chapter ? `${esc(c.chapter)} &middot; ` : ""}<span class="fig">${c.chapter_index} of ${c.chapters}</span></span></div>`;
   }
   if (c.chapter) return `<div class="sub"><span>${esc(c.chapter)}</span>${c.chapters ? `<span class="fig">${c.chapters} ch.</span>` : ""}</div>`;
   return c.chapters ? `<div class="sub"><span class="fig">${c.chapters} ch.</span></div>` : "";

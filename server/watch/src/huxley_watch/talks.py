@@ -91,7 +91,9 @@ _GARBLED = (
     "suscribete",
     "thanks for watching",
 )
-_LEADING_NO = re.compile(r"^[\s\W]*no\s*(?:[,.!;:]|$)")  # "No, ...", "No!" (after any opening mark), "no"
+_LEADING_NO = re.compile(
+    r"^[\s\W]*no\s*(?:[,.!;:]|$)"
+)  # "No, ...", "No!" (after any opening mark), "no"
 _THAT_NOT = re.compile(r"\b(esa|ese) no\b")
 _QUERY_KEYS = ("query", "title", "station", "name", "book_id", "action")
 
