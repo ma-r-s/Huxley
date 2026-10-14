@@ -60,10 +60,14 @@ The production server for grandpa's walkie runs on the shared Orange Pi
   Follow it with `~/huxley/scripts/pi/admin.sh firmware` on the Pi (offer,
   files, the walkie's last hello, the accept flow) and the `firmware.*`
   log lines. A console line: `~/huxley/scripts/pi/admin.sh dev-cmd
-  'line=info'`. The admin routes answer only loopback and Tailscale, never
+  'line=info'`; a line carrying a secret (a Wi-Fi password) goes on stdin
+  instead, so it never sits in a command line or shell history:
+  `printf %s "$LINE" | ssh mario@100.75.152.70 "~/huxley/scripts/pi/admin.sh
+  dev-cmd line@-"` (the server logs only a line's first word either way).
+  The admin routes answer only loopback and Tailscale, never
   through a proxy, and need `X-Huxley-Admin: <HUXLEY_ADMIN_TOKEN>` (in the
   server's `.env`, mode 600): `admin.sh` reads it there and hands it to
-  curl on stdin, so it never lands in a command line or a log. Without the
+  curl on a file descriptor, so it never lands in a command line or a log. Without the
   token anything else on this shared box (Home Assistant and two other
   containers share the host's network) or on the tailnet could drive the
   walkie's console. The Cloudflare tunnel routes `/firmware/*` and

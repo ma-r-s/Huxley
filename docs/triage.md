@@ -6167,7 +6167,7 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 
 ## T1.52: Close the gaps in running the walkie from afar
 
-**Status**: `queued` (2026-10-14, filed at the handover) · **Effort**: M (a firmware half, a server half, a page alert)
+**Status**: `in_progress` (2026-10-14; firmware half F-0036 in design with the firmware session) · **Effort**: M (a firmware half, a server half)
 
 **Problem** (Mario, at the handover: "do we have complete control and a really good system to make updates from afar for everything?"). Audit, 2026-10-14:
 
@@ -6180,12 +6180,13 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 | **Adding a Wi-Fi network** | **no**: `wifi addhex` and `wifi forget` are refused off USB (`console.wifi_addhex refused: USB console only`, hux_console.c) | read 2026-10-14 |
 | Telegram number | on site only (the login code goes to his phone) | scripts/pi/telegram-login.sh |
 
-**Why it matters**: the Wi-Fi row is the one way to lose the walkie for good from afar. A new router or a changed password at the home leaves it offline, and only someone on site with a laptop and USB can fix it. Two smaller edges: a firmware update reboots with the startup chime and the connected chime, unprompted, possibly next to him; and nothing alerts if an offered update never comes back or rolls back (remote-operation.md: "Not yet: the 24 h probation alerts").
+**Why it matters**: the Wi-Fi row is the one way to lose the walkie for good from afar. A new router or a changed password at the home leaves it offline, and only someone on site with a laptop and USB can fix it. The remote channel is the walkie's own connection, so a remote add helps only while it is online: added ahead of a planned change (the home announces a new router or password), or from the rescue hotspot.
 
-**Proposed** (design + critic before code):
-1. Firmware (firmware session): accept `wifi addhex` over the authenticated `dev.cmd` channel too, with the existing trial (no IP within 30 s and it goes back to the network it was on, hux_net.c `wifi_add_tick`) so a wrong password can't strand it; `forget` stays USB only. The line is already kept out of logs on both ends (the console's `secret` flag; the server logs the command word only).
-2. Server: a way to send it that keeps the password off command lines and out of shell history (admin.sh reads it from stdin), and the admin request's query string kept out of any access log.
-3. Firmware: a reboot after an accepted update plays no startup or connected chime (the rainbow can stay); offers go out at night by habit.
-4. huxley-watch: an alert when an offered version isn't accepted within 15 minutes, or the walkie rolls back.
+**Plan**:
+1. Firmware, F-0036 (firmware session, design out to a cold critic): `wifi addhex` accepted over the authenticated `dev.cmd` channel; a staged mode (`... later`: saved without joining, tried when heard, never `good` until it reaches the server) so a network not on the air yet isn't reverted as not heard; a server-sourced trial add kept only if the server answers within 90 s; `forget` stays USB only; the line buffers wiped after use. Open: same-SSID password changes, removing a wrong staged entry from afar, and testing with no spare board (host tests, then a night test on his walkie, staged mode first: it never leaves the current network).
+2. Server, done: `admin.sh` takes one `key@-` whose value comes on stdin, so the password never sits in a command line or shell history (`printf %s "$LINE" | ssh pi "~/huxley/scripts/pi/admin.sh dev-cmd line@-"`); the token now reaches curl on fd 3. Already true and kept: the server logs a dev-cmd line's first word only, and admin requests log the path without the query. Test: `test_pi_admin_script.py` runs the real script under sh and dash against a stub server, with a curl shim recording its argv (neither the token nor the value on it; refusals send nothing).
+3. Next, once F-0036's syntax settles: a Mac helper, `scripts/pi/wifi-add.sh <SSID> [--later]`, asking for the password hidden, hex-encoding both and sending through item 2, with a bench window for a trial add.
 
-**DoD**: a second network added over `admin.sh` (on a spare board, or on his walkie in a bench window while he isn't using it), joined, and the walkie back on its old network when the second one's password is wrong; no password in the server log, bench.jsonl, firmware log or shell history; an OTA reboot is silent; a withheld accept raises the alert in a test.
+**Dropped after checking**: the "an update reboots with chimes" edge doesn't exist: any software restart, an accepted update's included, plays no startup or connected sound and no rainbow (F-0033: only a real power on or a charge after the park; every flash on 2026-10-14 logged `power_on=0`, silent). I had assumed it without reading the firmware. And a separate alert for an update that never comes back: a failed update rolls back by itself and the walkie comes back on the old version, and one that strands it offline already raises the offline alert; nothing left for a new alert to catch.
+
+**DoD**: a second network added over `admin.sh` (on a spare board, or on his walkie in a bench window while he isn't using it), joined, and the walkie back on its old network when the second one's password is wrong; a network staged with `later` while the walkie stays on its current one; no password in the server log, bench.jsonl, firmware log, command lines or shell history (server half proven by test_pi_admin_script.py).
