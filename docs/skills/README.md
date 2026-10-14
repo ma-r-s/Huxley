@@ -629,7 +629,7 @@ Skill-specific docs:
 - [`news.md`](news.md) — Open-Meteo weather + Google News RSS summarization.
 - [`radio.md`](radio.md) — HTTP/Icecast streams via ffmpeg.
 - [`spotify.md`](spotify.md) — Spotify through Spotify Soloist, streamed like radio.
-- [`search.md`](search.md) — open-web search via DuckDuckGo (no API key); for current/live info the LLM doesn't already know.
+- [`search.md`](search.md): open-web search (ddgs metasearch, Google News headlines, page excerpts; no API key) for anything that may have changed since the model's training.
 - [`timers.md`](timers.md) — one-shot relative reminders ("recuérdame en 5 minutos") via proactive speech, persisted across restart.
 - [`reminders.md`](reminders.md) — scheduled reminders for specific times ("recuérdame mañana a las 8") with kind-aware retry escalation, daily/weekly recurrence, and missed-reminder catch-up.
 

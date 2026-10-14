@@ -342,6 +342,24 @@ Diagnosing common failures:
 3. **"Backfill fired but the LLM said 'I have a message' without reading it"** — the prompt wasn't an instruction to the LLM. Verify `text_len` on `session.tx.conversation_message` is large enough to include the message bodies; if it's short (< 100 chars), the prompt may be missing the body content.
 4. **"Backfill on restart didn't fire at all"** — `_run_backfill` waits 5 s after `setup_complete` before injecting, so the OpenAI session has time to connect (otherwise the inject is lost — see the lessons in `docs/triage.md` T1.11). If you see `telegram.setup_complete` but never `telegram.backfill.injecting`, check whether the Pyrogram session re-authenticated mid-flight or the resolver returned no whitelisted user_ids.
 
+## Web search events: why an answer was wrong or slow
+
+The `search.*` namespace (T1.48) logs one line per step of a `search_the_web` call, all with the same `query_hash` (the query itself is only at debug). Full table: [`skills/search.md`](./skills/search.md#observability).
+
+| Event | Read it for |
+| --- | --- |
+| `search.attempt` | Which backend answered, and how each earlier one failed: `backend`, `outcome` (ok, empty, timeout, rate_limited, error), `latency_ms`, `error_class`. Three `empty` lines in a row means the engines are blocking the Pi, not that nothing exists. |
+| `search.news`, `search.headlines` | Whether fresh news existed: `count` returned, `kept` (fresh and on topic), `outcome`. |
+| `search.page` | Which pages gave the model text: `domain`, `rank`, `outcome` (ok, no_text, error, timeout), `reason` (`http_403`, ...), `chars`. |
+| `search.results` | The whole call: `latency_ms`, `backend`, `excerpts`, `headlines`, `news`, `output_chars`. |
+| `search.timeout` / `search.rate_limited` / `search.error` | A failure the user heard as `say_to_user`; `attempts` lists `backend:outcome:ms` for each try. |
+
+Diagnosing:
+
+1. **"It said it couldn't search"**: the warning's `attempts`. All `timeout` means the network or the engines hung; all `empty` with `error_class=DDGSException` means every engine refused the Pi (change `DEFAULT_BACKENDS` in `provider.py`).
+2. **"It gave yesterday's answer"**: `search.news kept=0` and `search.headlines outcome=none` mean no fresh news was found; the transcript shows whether the model used the `date` fields.
+3. **"It took long"**: `search.results latency_ms` against the `search.attempt` latencies; the page fetches add at most 2.5 s (`search.page outcome=timeout`).
+
 ## Skill schema versions — pin the upgrade path
 
 T1.14's `data_schema_version` mechanism emits three events from the runtime, all under the `skill.schema.*` prefix:

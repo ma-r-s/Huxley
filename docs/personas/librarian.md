@@ -14,7 +14,7 @@ Librarian is a research-oriented persona — precise, authoritative, and unhurri
 | ------------ | ------------------------------- |
 | `system`     | Current time, volume control    |
 | `news`       | Current events (5 items, cited) |
-| `search`     | Web research via DuckDuckGo     |
+| `search`     | Web research (ddgs metasearch)  |
 | `audiobooks` | Read books from a local library |
 
 ## Design choices

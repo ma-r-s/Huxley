@@ -5782,3 +5782,88 @@ Branch `t144-inject-waits` (worktree), on base f0897867: 7d23267e (design), 36fd
 **Smoke R2 (2026-10-12, merged 66e7f5f6, live on the Pi)**: a narration cut by a Wi-Fi drop had reached the walkie whole and played from its ring while offline; the server marked it `no_pong` and repeated it after the reconnect, so it was heard twice. Fixed on `t144-heard-after-drop`: the reconnect's `device.hello` now reports `played_after_drop_ms`, `ring_left_ms`, `drop_uptime_ms` (firmware 0e9a3347), and a turn cut after it was all sent waits up to 2 s for that hello and counts as heard when the ring drained and played at least what was unplayed at the drop (turns.md).
 
 **Lessons**: both critics earned their keep. The first turned "a pong timeout is delivered" and a cached presence flag around before any code; the second found four bugs in code that passed 940 tests, three of them in the gaps between awaits. The repo's medication retries had never fired at runtime: nothing tested the scheduler past the first fire.
+
+
+## T1.48: Web search and news that actually answer grandpa
+
+**Status**: `in_progress` (2026-10-13): built on branch `t148-search-news` (worktree), eval run on the Pi, critic pending; then Mario's walkie smoke and the merge · **Effort**: M (two skills + persona; no framework change)
+
+**Problem.** Search was almost never used, and failed when it was: the one production call (2026-10-12, "cartelera Trocál Parque") hit `search.timeout reason=deadline_exceeded:4.0s`. The persona told the model not to search "stable facts you already know", but its knowledge is stale (it would name the previous Colombian president). Only snippets reached the model, and snippets rarely hold a score, a price or today's plates. News came back as 8 headlines with every clustered headline run together as a "summary" (6.9 KB), `category: local` was the national feed, and the model narrated vaguely ("algo llamado sometimiento", "cada noticia tiene distintos enfoques").
+
+**Why it matters.** A blind user can't check anything; a wrong confident answer (the old president, last year's match) is worse than "no lo encontré claro".
+
+### Validation (Gate 1)
+
+- Production logs (Pi, 2026-10-12/13): one `search.dispatch` then `search.timeout` at 4.0 s; 5 `get_news` calls, each 8 items, `output_len` 6855; transcript of 2026-10-13 23:24 shows the vague narration above.
+- Engine probe from the Pi, 2026-10-13, ddgs 9.14.1, fresh client per query: `yandex` 8/8 (about 1 s), `yahoo` 3/8 then 6/6 in another run (flaky), ddgs `auto` 8/8 but 3.7 s on a cold first call, `duckduckgo` / `brave` / `mojeek` 0/6 ("No results found.": blocked). A reused client kept a refused Yahoo session (shared: nothing; fresh: 5 hits). `import ddgs` 0.03-0.1 s; reuse saves about 0.35 s on Yandex: no warm-up.
+- Page fetch probe (top 3 pages of 10 queries): most answer in 0.3-1.9 s; about one in four times out at 2.5 s or returns 403/502; a few are JavaScript shells or bot walls (empty text).
+- Google News probe: a plain "Villavicencio" search returned 101 items, 5 from the last day, five copies of one accident; `when:2d` and `Villavicencio OR "del Meta"` gave 20 local items in the last day.
+- Found on the way: in ddgs 9.14 only Brave and Mojeek read `safesearch`, and Brave read the skill's `"strict"` as OFF.
+
+### Design (Gate 2)
+
+Search (`server/skills/search/`):
+- `DdgsProvider`: backends `yandex`, `yahoo`, `auto` in order inside an 8 s deadline, at most 3 s per attempt, none started with under 1 s left; worst failure wins (rate limited, timeout, error), all-empty is an honest empty; `region` from config (abuelos `co-es`); `strict` sent as ddgs `on`.
+- Two news lanes in parallel with the web search: Google News RSS headlines (3, last 72 h, sharing two query words, copies dropped; `region` picks the edition) and a ddgs news-article search (articles with URLs; fresh by URL date, else by the engine's date, which can only overstate age).
+- Merge: up to 2 fresh articles first, alternating with web results; persona `preferred_domains` up one place; video/social last.
+- Excerpts: top 3 fetchable pages in parallel within 2.5 s, best 2 kept; lxml readability-style extraction (boilerplate tags and class names out unless they hold half the page's text; link lists, cookie and bot-wall text out; table rows kept), blocks chosen by query words, the weekday "hoy"/"mañana"/"ayer" means (pages say "Martes: 7 y 8"), numbers, then filled from the top; 1500 chars; page date (with the edit date for reference pages). Parsing in a thread. No excerpts for `safesearch: strict`.
+- Output: `today`, `headlines`, `results` (title, source, date, snippet, excerpt); no `url`. Tool description and persona rewritten (es/en/fr): search anything that may have changed even if it seems known; one or two sentences naming the source; check dates; say "no lo encontré claro" instead of guessing; health and medicines general and "confírmalo con el médico o el farmacéutico". "A ver, déjame buscar" kept.
+
+News (`server/skills/news/`): items `{title, source, age_hours, related?}` with up to two related headlines from Google's cluster; copies dropped (60% content-word overlap); searches and `local` add `when:3d` and keep 72 h; `local_query` config (abuelos `Villavicencio OR "del Meta"`); weather gains `tomorrow` and `rain_chance_pct`.
+
+No `then` text added to news: narration style is persona scope (Basic wants five terse bullets), so the data got better instead.
+
+### Critic notes (Gate 2)
+
+(pending: fresh critic on the diff and the eval)
+
+### Definition of Done
+
+- Provider: deadline, fallback, region pass-through, error mapping, strict mapping tested without network.
+- Excerpt extraction tested on fixtures (article, table page, reference page, app shell, consent text, date boost); output shape and caps (2 excerpts x 1500, under 7.5 KB) tested; headlines and news lanes tested; news dedupe, freshness windows, related headlines, local query, weather tomorrow tested.
+- Eval on the Pi, old vs new, 15 search questions + 2 routed; table below.
+- ruff, ruff format, mypy (sdk, runtime, watch, search, news), all suites green.
+- Docs: `skills/search.md`, `skills/news.md`, `observability.md`, `skills/index.md`, `skills/README.md`, persona docs, persona.yaml, this entry.
+- Mario's walkie smoke after merge: "¿hay pico y placa hoy?", "¿quién es el presidente?", "¿cómo quedó Millonarios?", "noticias de Villavicencio", "¿va a llover mañana?".
+
+### Eval (Gate 3): `scripts/search_eval.py` on the Pi, 2026-10-13 about 19:30 Bogotá
+
+Same questions, same machine, old code (main) then new, minutes apart. "Hit" = the expected fact is in the tool output (regex, then read by hand: no override was needed; the medication hit for the new code rests on "interacción clínicamente relevante ... arriesgado" rather than the old snippet's more specific "puede dañar el riñón").
+
+| case | expected fact | old | new |
+|---|---|---|---|
+| match | Colombia won 2-1 (women's friendly, 13 Oct) | no, 3.9 s | yes, 3.8 s |
+| president | Abelardo de la Espriella | yes, 3.2 s | yes, 3.5 s |
+| dollar | TRM 13 Oct: 3.194,44 | no, 2.1 s | yes, 2.0 s |
+| age | Shakira: 49 | yes, 2.0 s | yes, 2.1 s |
+| death | Piero died 7 Oct, aged 81 | yes, 2.9 s | yes, 3.5 s |
+| holiday | Next festivo: Mon 2 Nov | no, 1.7 s | yes, 3.7 s |
+| tv | Millonarios-Once Caldas 8:30 p.m. today (Caracol Radio, La Patria) | no, 3.6 s | yes, 1.9 s |
+| recipe | Ajiaco: guascas, papa criolla | no, 1.7 s | yes, 3.5 s |
+| health | Stomach ache: fluids, bland food, doctor if strong | no, 2.8 s | no, 3.4 s |
+| medication | Ibuprofen + losartan interact; ask the doctor | yes, 2.0 s | yes, 3.8 s |
+| pope | Lung cancer diagnosed after surgery (13 Oct) | no, 1.5 s | yes, 1.8 s |
+| quake | Magnitude 5.0 today | no, 1.5 s | yes, 1.7 s |
+| cinema | A film showing today in Villavicencio | no, 2.4 s | no, 1.9 s |
+| plates | Tuesday: plates 7 and 8 | yes, 1.5 s | yes, 2.0 s |
+| status | Nairo Quintana retired | yes, 1.5 s | yes, 1.7 s |
+| weather tomorrow (get_weather) | tomorrow with rain chance | no (today only) | yes |
+| news today (get_news) | today's top stories | yes, 6.9 KB | yes, 3.8 KB |
+
+**Search: 6/15 old, 13/15 new. Median latency 2.0 s old, 2.1 s new (max 3.9 / 3.8 s). Median output 2.1 KB old, 4.3 KB new.** The old code didn't time out in this run (production's 4 s timeout was ddgs `auto` landing on slow engines); the new deadline is 8 s with three backends. Misses: cinema listings (JavaScript pages; one listing found was from August), stomach ache (engines returned Pinterest, TikTok, a headache article; the model's own careful advice, already seen in production, is the fallback). The weather and news questions route to their own tools; the tool descriptions say so.
+
+### Tests (Gate 3)
+
+- Search: 104 (was 34): `test_provider.py` (fallback, deadline, error mapping, strict, news lane), `test_pages.py` (fixtures, caps, dates, date boost), `test_headlines.py`, `test_skill.py` (shape and caps, excerpts and budget, ranking, both news lanes, failures with attempts, cache, breaker, descriptions, privacy, child-safe).
+- News: 30 (was 18): item shape and related headlines, dedupe, 24 h vs 72 h windows, local query, weather tomorrow.
+- Runtime 1194 green; ruff, ruff format, mypy clean (lxml added to the untyped-imports override).
+
+### Docs touched (Gate 4)
+
+`docs/skills/search.md` (rewritten: pipeline, measured backends, excerpts, config, events, limits), `docs/skills/news.md`, `docs/observability.md` (web search section), `docs/skills/index.md`, `docs/skills/README.md`, `docs/personas/{buddy,chief,librarian}.md`, `server/personas/abuelos/persona.yaml` (es/en/fr), skill READMEs and CHANGELOGs (both 0.2.0), root `pyproject.toml` (mypy override). `CLAUDE.md` still says "DuckDuckGo via ddgs" for the search skill: left for Mario (agents don't edit it).
+
+### Ship (Gate 5)
+
+Branch `t148-search-news`, not merged, not pushed, not deployed.
+
+**For Mario to decide**: (1) safe search for Buddy (the kids persona): ddgs's working engines ignore it, so `strict` filters little; the skill now withholds page text for strict personas, but titles and snippets are unfiltered; a filtered provider would be a separate item. (2) Output per search roughly doubled (about 4.3 KB median), more input tokens per search on the Realtime bill; the caps hold it under 7.5 KB.
