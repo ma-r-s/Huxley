@@ -53,6 +53,9 @@ void hux_console_start(void);
  * serial console calls it, and so does hux_dev's POST /cmd over Wi-Fi.
  * Its results are log lines (serial, and the server's log). */
 void hux_console_run(char *line);
+/** The same, for a line from the server's dev.cmd (F-0036: a Wi-Fi add is
+ * staged, a forget never takes the network in use). */
+void hux_console_run_server(char *line);
 
 /** The line carries a secret (`wifi addhex`): log it redacted. */
 bool hux_console_is_secret(const char *line);

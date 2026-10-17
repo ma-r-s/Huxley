@@ -279,7 +279,7 @@ void app_main(void) {
     /* server_event dev.cmd runs console lines; updates pulled from the
      * server report through the app and keep themselves only after the
      * silent self-test below (F-0028). */
-    hux_app_set_dev_cmd_runner(hux_console_run);
+    hux_app_set_dev_cmd_runner(hux_console_run_server);
     hux_ota_set_status_sink(hux_app_firmware_status);
     hux_ota_set_selftest(update_selftest);
 

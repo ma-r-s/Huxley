@@ -101,9 +101,10 @@ bool hux_console_is_secret(const char *line) {
     return n == 6 && strncmp(t, "addhex", 6) == 0; /* by token: any spacing */
 }
 
-/* `usb`: typed on the USB console. Adding or forgetting a network works only
- * there (F-0027): a password never crosses the server or the LAN. */
-static void run_line(char *line, bool usb) {
+/* Where the line came from (F-0036): adding a network works on USB (join
+ * now) and from the server (wss with the device token: staged, or a known
+ * name's second password), never over the LAN door (plain HTTP). */
+static void run_line(char *line, hux_wifi_src_t src) {
     char *argv[4] = {0};
     int argc = 0;
     for (char *tok = strtok(line, " \t"); tok != NULL && argc < 4; tok = strtok(NULL, " \t")) {
@@ -118,8 +119,10 @@ static void run_line(char *line, bool usb) {
              argc > 2 ? " " : "", secret ? "<redacted>" : argc > 2 ? argv[2] : "");
 
     if (strcmp(cmd, "wifi") == 0 && argc > 1 &&
-        (strcmp(argv[1], "addhex") == 0 || strcmp(argv[1], "forget") == 0) && !usb) {
-        ESP_LOGW(TAG, "console.wifi_%s refused: USB console only", argv[1]);
+        (strcmp(argv[1], "addhex") == 0 || strcmp(argv[1], "forget") == 0) &&
+        src == HUX_WIFI_SRC_DOOR) {
+        ESP_LOGW(TAG, "console.wifi_%s refused: USB or the server only, never the LAN door",
+                 argv[1]);
         return;
     }
 
@@ -227,7 +230,7 @@ static void run_line(char *line, bool usb) {
             hux_hex_decode(argv[3], pass, sizeof(pass)) < 0) {
             ESP_LOGW(TAG, "wifi.add refused why=bad_hex");
         } else {
-            (void)hux_net_wifi_add(ssid, pass);
+            (void)hux_net_wifi_add(ssid, pass, src);
         }
         memset(pass, 0, sizeof(pass));
     } else if (strcmp(cmd, "wifi") == 0 && argc > 2 && strcmp(argv[1], "forget") == 0) {
@@ -235,7 +238,7 @@ static void run_line(char *line, bool usb) {
         if (hux_hex_decode(argv[2], ssid, sizeof(ssid)) < 0) {
             ESP_LOGW(TAG, "wifi.forget refused why=bad_hex");
         } else {
-            (void)hux_net_wifi_forget(ssid);
+            (void)hux_net_wifi_forget(ssid, src);
         }
     } else if (strcmp(cmd, "wifi") == 0 && argc > 2 && strcmp(argv[1], "join") == 0) {
         char ssid[33]; /* bench: a known network now, heard or not (F-0027) */
@@ -326,7 +329,11 @@ static void run_line(char *line, bool usb) {
 }
 
 void hux_console_run(char *line) {
-    run_line(line, false); /* the developer door, the server's dev.cmd */
+    run_line(line, HUX_WIFI_SRC_DOOR); /* the LAN developer door */
+}
+
+void hux_console_run_server(char *line) {
+    run_line(line, HUX_WIFI_SRC_SERVER); /* the server's dev.cmd */
 }
 
 static void console_task(void *unused) {
@@ -357,7 +364,7 @@ static void console_task(void *unused) {
                     /* Never a cut line: a password cut short would be saved. */
                     ESP_LOGW(TAG, "console.line_too_long max=%d: refused", LINE_MAX_BYTES - 1);
                 } else {
-                    run_line(line, true);
+                    run_line(line, HUX_WIFI_SRC_USB);
                 }
                 memset(line, 0, sizeof(line)); /* a password doesn't linger */
                 len = 0;

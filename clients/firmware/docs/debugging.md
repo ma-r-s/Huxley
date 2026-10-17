@@ -426,16 +426,50 @@ ssid_len= pass_len=` (never the password), then `wifi.add saved` (it
 gave an IP; kept) and `server_reached` or `no_server`, or `wifi.add
 failed why=wrong_password|auth_failed|security_too_weak|enterprise_login|not_heard|no_ip`
 and back to the previous network, or `wifi.add refused
-why=lengths|busy|known|full|bad_hex`. Then it checks
+why=lengths|busy|full|second_in_use|link_busy|nvs|bad_hex`. A name it
+already knows takes the password as its second one (`wifi.add second`,
+or `wifi.add same` when it has it already). Then it checks
 https://walkie.ma-r-s.com from the laptop and restarts the walkie to see
 it come back by itself. `wifi list` (also `tools/wifi.py list`) shows the
 networks, which is good and active, and the MAC; `wifi forget <name
 hex>`. Bench: `wifi join <name hex>` joins a known network now, heard or
 not: on one it can't hear, the field case in reverse, it should find
 another within about 2 min (`wifi.choose why=no_ip`); a scan the radio
-refuses while a connect winds down is retried (`wifi.scan busy attempt=`). Adding and forgetting work only on the USB console: through the
-developer door or the server they're refused (`console.wifi_addhex
-refused`). Console lines are up to 255 bytes; a longer one is refused
+refuses while a connect winds down is retried (`wifi.scan busy attempt=`).
+
+From afar (F-0036), with the walkie online: `scripts/pi/wifi.sh add
+"<name>"` (the password asked twice with no echo, sent on stdin end to
+end), `forget "<name>"`, `list`. The server's `dev.cmd` is the only
+remote door; the LAN developer door (plain HTTP) refuses both
+(`console.wifi_addhex refused`). The walkie refuses while in use or
+updating (`app.dev_cmd refused why=press|call|playing|...|updating|pending_verify`).
+A new name is saved **staged** (`wifi.add staged ... queued`: s0..s3 in
+NVS, which an older image doesn't read, so a rollback never joins it)
+and tried once at once only if a scan hears it (`wifi.staged_try start`):
+it must reach the server within 90 s (`wifi.staged_try reached_server`,
+then `wifi.confirmed what=staged`: it moves to w0..w3) or the walkie goes
+back to the network it was on and keeps the entry staged
+(`wifi.staged_try failed why=... kept staged`); not heard
+(`wifi.staged_try skipped why=not_heard`): the ranking joins it when it
+is heard, e.g. once the old router is gone. A trial takes the walkie off
+the server for up to 90 s (in daytime he hears `lost` at 20 s): stage at
+night. A known name, from afar or on USB, takes the password as its
+**second** one (p0..p6 in NVS; never replacing the first, the one that
+reached the server): after 3 wrong-password failures in a row on the
+first (`wifi.auth_failed ssid= run= second=1`) it switches
+(`wifi.password_switch to=second`, `wifi.join ... password=second`), and
+straight back after 3 more (a weak signal can fail three handshakes on the
+right one), then at most twice per 10 min; the one that reaches the
+server becomes the first and the old one is dropped (`wifi.confirmed
+what=second`), so an older image after a rollback joins with it and no
+later switch lands on a dead password. A staged name sent again with
+another password (a typo) replaces it and is tried again (`wifi.add
+restaged`); `wifi join` never takes a staged one blind (`why=staged`). A compiled name keeps one stored
+password: once that one reached the server, a new one is refused
+(`why=second_in_use`). `wifi forget` from afar takes any saved or staged
+entry but the one in use (`wifi.forget refused why=active`). `wifi list`
+says `source=compiled|saved|staged second=0|1 using=first|second`.
+Console lines are up to 255 bytes; a longer one is refused
 whole (`console.line_too_long`), never cut, and so is a cut `dev.cmd`
 (`app.dev_cmd refused why=line_too_long`); the console's echo and the
 developer door log `<redacted>` for `wifi addhex`. NVS is only a bridge:

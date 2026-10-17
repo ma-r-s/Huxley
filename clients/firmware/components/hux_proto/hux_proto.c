@@ -137,6 +137,8 @@ bool hux_proto_parse(const char *json, size_t len, hux_msg_t *out) {
             if (cJSON_IsString(line)) {
                 int n = snprintf(se->line, sizeof(se->line), "%s", line->valuestring);
                 se->line_truncated = n >= (int)sizeof(se->line);
+                /* cJSON's own copy: a line can carry a Wi-Fi password (F-0036). */
+                memset(line->valuestring, 0, strlen(line->valuestring));
             }
             const cJSON *version = cJSON_GetObjectItemCaseSensitive(data, "version");
             if (cJSON_IsString(version)) {

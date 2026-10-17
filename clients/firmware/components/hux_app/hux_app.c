@@ -688,7 +688,7 @@ static void leave_ptt(void) {
     uplink_control(UPLINK_PTT_STOP);
 }
 
-/* dev.cmd's runner: hux_console_run, set by main (the console depends on
+/* dev.cmd's runner: hux_console_run_server, set by main (the console depends on
  * this component already). */
 static hux_app_dev_cmd_fn s_dev_cmd_runner = NULL;
 
@@ -699,6 +699,23 @@ void hux_app_set_dev_cmd_runner(hux_app_dev_cmd_fn runner) {
 /* server_event dev.cmd {id, line}: run one console line here and answer
  * client_event dev.cmd_result {id, output, truncated} with what it logged
  * on this task (F-0028: the console through the server, no LAN door). */
+static const char *ota_in_use_why(void);
+
+/* The line's first two words are `w1 w2` (any spacing). The app can't
+ * depend on the console (the console depends on the app): it reads the
+ * words itself. */
+static bool line_starts(const char *line, const char *w1, const char *w2) {
+    const char *p = line + strspn(line, " \t");
+    size_t n = strcspn(p, " \t");
+    if (n != strlen(w1) || strncmp(p, w1, n) != 0) {
+        return false;
+    }
+    p += n;
+    p += strspn(p, " \t");
+    n = strcspn(p, " \t");
+    return n == strlen(w2) && strncmp(p, w2, n) == 0;
+}
+
 static void run_dev_cmd(hux_msg_server_event_t *se) {
     static char out[1536];
     if (s_dev_cmd_runner == NULL || se->line[0] == '\0' || se->line_truncated) {
@@ -710,8 +727,28 @@ static void run_dev_cmd(hux_msg_server_event_t *se) {
         return;
     }
     ESP_LOGI(TAG, "app.dev_cmd id=%s line_truncated=%d", se->id, se->line_truncated);
+    /* A Wi-Fi change from afar waits for idle (F-0036): a staged name's
+     * trial takes the walkie off the server for up to 90 s, and an update
+     * in flight must not lose its link. */
+    const char *blocked = NULL;
+    if (line_starts(se->line, "wifi", "addhex") || line_starts(se->line, "wifi", "forget")) {
+        const char *use = ota_in_use_why();
+        blocked = use != NULL                                         ? use
+                  : hux_ota_busy()                                    ? "updating"
+                  : strcmp(hux_ota_running_state(), "pending") == 0   ? "pending_verify"
+                                                                      : NULL;
+    }
+    bool secret = line_starts(se->line, "wifi", "addhex");
     hux_log_capture_begin(out, sizeof(out));
-    s_dev_cmd_runner(se->line); /* may modify the line; the reply doesn't need it */
+    if (blocked != NULL) {
+        ESP_LOGW(TAG, "app.dev_cmd refused id=%s why=%s: a Wi-Fi change waits for idle", se->id,
+                 blocked);
+    } else {
+        s_dev_cmd_runner(se->line); /* may modify the line; the reply doesn't need it */
+    }
+    if (secret) {
+        memset(se->line, 0, sizeof(se->line)); /* the copy we own (F-0036) */
+    }
     bool truncated = false;
     size_t len = hux_log_capture_end(&truncated);
     cJSON *root = cJSON_CreateObject();
@@ -971,6 +1008,9 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
             switch (parsed.as.server_event.event) {
                 case HUX_SERVER_EV_DEV_CMD:
                     run_dev_cmd(&parsed.as.server_event);
+                    /* The raw frame held the line too (a Wi-Fi password,
+                     * F-0036): wiped before app_task frees it. */
+                    memset(msg->data, 0, msg->len);
                     break;
                 case HUX_SERVER_EV_FIRMWARE_UPDATE:
                     pull_update(&parsed.as.server_event);

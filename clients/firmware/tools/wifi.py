@@ -7,6 +7,9 @@
     python3 clients/firmware/tools/wifi.py list     # what it knows (never passwords) and its MAC
     python3 clients/firmware/tools/wifi.py forget   # drop one added on site
 
+A name it already knows takes the password as its second one (F-0036). From
+afar, with the walkie online: scripts/pi/wifi.sh.
+
 Run it in your own terminal: the password is asked with no echo and goes
 only to the walkie (as hex on its USB console; the walkie never logs it).
 Nothing is written to disk. The port is opened with DTR and RTS held high
@@ -133,7 +136,8 @@ def server_reachable() -> str:
 WHY = {
     "lengths": "the name must be 1-32 characters and the password 8-64",
     "busy": "another network is being added; wait a minute",
-    "known": "the walkie already knows that name: `forget` it first to change its password",
+    "second_in_use": "that built-in network already runs on a stored password; it keeps it",
+    "link_busy": "the walkie was busy with its connection; try again in a minute",
     "full": "the walkie already has 4 networks added: `forget` one first",
     "bad_hex": "the tool sent something odd; try again",
     "config": "the walkie's Wi-Fi refused that name or password",
@@ -179,9 +183,20 @@ def add(c: Console) -> None:
     c.drain()
     c.send(line)
     line = ""
-    m = c.wait(r"wifi\.add (refused|failed|saved)(?: .*why=(\w+))?", 60)
+    m = c.wait(r"wifi\.add (refused|failed|saved|second|same)(?: .*why=(\w+))?", 60)
     if m is None:
         sys.exit("No answer from the walkie in 60 s. Run `list` to see what it did.")
+    if m.group(1) == "same":
+        sys.exit(f'The walkie already has that password for "{name}".')
+    if m.group(1) == "second":
+        # F-0036: a known name keeps its first password and takes this one
+        # as its second, tried after 3 wrong-password failures in a row.
+        print(
+            f'Kept as the second password for "{name}": the walkie switches to it after '
+            "three wrong-password failures on the first, and keeps whichever reaches the server."
+        )
+        show_list(c)
+        return
     if m.group(1) != "saved":
         why = m.group(2) or ""
         sys.exit(f"Not added: {WHY.get(why, why)}. It stays on its previous network.")

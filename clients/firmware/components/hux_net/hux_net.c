@@ -416,10 +416,10 @@ static int bandwidth_mhz(wifi_bandwidth_t bw) {
 #define WIFI_AUTH_FAILS    3                /* in a row: a wrong password (one can be weak signal) */
 #define WIFI_HEARD_MAX     40
 
-typedef struct {
-    char ssid[33];
-    char pass[65];
-} wifi_saved_t;
+/* The old saved entry is hux_wifi_blob_t, byte for byte (an older image
+ * reads w0..w3 as these); s0..s3 staged and p0..p6 second passwords are
+ * new keys it ignores (F-0036). */
+_Static_assert(sizeof(hux_wifi_blob_t) == 98, "w0..w3 keep the layout older images read");
 
 static hux_wifi_net_t s_nets[HUX_WIFI_MAX];
 static int s_nnets = 0;
@@ -434,7 +434,7 @@ static _Atomic uint32_t s_hello_ms = 0;
 static _Atomic uint32_t s_stable_ms = 0;
 /* Saved entries an update has since compiled in: kept in NVS untouched (a
  * rollback to an older image still finds them), not joined twice. */
-static wifi_saved_t s_shadow[HUX_WIFI_SAVED_MAX];
+static hux_wifi_blob_t s_shadow[HUX_WIFI_SAVED_MAX];
 static int s_nshadow = 0;
 static _Atomic bool s_have_ip = false;
 /* A scan or a join under way: the disconnect handler doesn't retry. */
@@ -447,7 +447,16 @@ static struct {
     int prev;
     uint32_t since_ms;
     bool saved;
+    bool remote; /* a staged name's trial (F-0036): kept staged on failure, never deleted */
 } s_add;
+/* F-0036: a staged name to try once if heard (by name: a forget may move
+ * indices meanwhile); a switch to the other password asked by the
+ * disconnect handler, for the network it saw fail. */
+static _Atomic bool s_stage_req = false;
+static char s_stage_name[33];    /* written under the link lock */
+static _Atomic bool s_flip_req = false;
+static _Atomic int s_flip_idx = -1; /* the network the wrong-password run was on */
+static hux_wifi_auth_t s_auth;   /* the disconnect handler's (a join resets fails) */
 static _Atomic uint32_t s_add_ip_ms = 0;
 static _Atomic int s_add_auth_fails = 0;
 static _Atomic int s_add_last_reason = 0;
@@ -462,7 +471,10 @@ static int wifi_find(const char *ssid) {
 }
 
 static const char *net_source(int i) {
-    return i >= 0 && i < s_nnets && s_nets[i].compiled ? "compiled" : "saved";
+    return i < 0 || i >= s_nnets ? "?"
+           : s_nets[i].compiled  ? "compiled"
+           : s_nets[i].staged    ? "staged"
+                                 : "saved";
 }
 
 static void wifi_add_compiled(const char *ssid, const char *pass) {
@@ -471,9 +483,17 @@ static void wifi_add_compiled(const char *ssid, const char *pass) {
         return;
     }
     hux_wifi_net_t *n = &s_nets[s_nnets++];
+    memset(n, 0, sizeof(*n));
     strlcpy(n->ssid, ssid, sizeof(n->ssid));
     strlcpy(n->pass, pass, sizeof(n->pass));
     n->compiled = true;
+}
+
+static int blob_read(nvs_handle_t h, char kind, int k, void *out, size_t size) {
+    char key[4];
+    snprintf(key, sizeof(key), "%c%d", kind, k);
+    size_t len = size;
+    return nvs_get_blob(h, key, out, &len) == ESP_OK && len == size;
 }
 
 static void wifi_list_load(const hux_net_config_t *cfg) {
@@ -483,26 +503,16 @@ static void wifi_list_load(const hux_net_config_t *cfg) {
     wifi_add_compiled(cfg->wifi3_ssid, cfg->wifi3_password);
     int compiled = s_nnets;
     s_good[0] = '\0';
+    static hux_wifi_store_t st; /* boot only; wiped after */
+    memset(&st, 0, sizeof(st));
     nvs_handle_t h;
     if (nvs_open(WIFI_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        for (int k = 0; k < HUX_WIFI_SAVED_MAX && s_nnets < HUX_WIFI_MAX; k++) {
-            char key[4];
-            snprintf(key, sizeof(key), "w%d", k);
-            wifi_saved_t w;
-            size_t len = sizeof(w);
-            if (nvs_get_blob(h, key, &w, &len) == ESP_OK && len == sizeof(w) &&
-                memchr(w.ssid, 0, sizeof(w.ssid)) != NULL &&
-                memchr(w.pass, 0, sizeof(w.pass)) != NULL && w.ssid[0] != '\0') {
-                if (wifi_find(w.ssid) >= 0) {
-                    s_shadow[s_nshadow++] = w; /* compiled in since: keep, don't join twice */
-                } else {
-                    hux_wifi_net_t *n = &s_nets[s_nnets++];
-                    memcpy(n->ssid, w.ssid, sizeof(n->ssid));
-                    memcpy(n->pass, w.pass, sizeof(n->pass));
-                    n->compiled = false;
-                }
-            }
-            memset(&w, 0, sizeof(w));
+        for (int k = 0; k < HUX_WIFI_SAVED_MAX; k++) {
+            st.nsaved += blob_read(h, 'w', k, &st.saved[st.nsaved], sizeof(st.saved[0]));
+            st.nstaged += blob_read(h, 's', k, &st.staged[st.nstaged], sizeof(st.staged[0]));
+        }
+        for (int k = 0; k < HUX_WIFI_MAX; k++) {
+            st.nalts += blob_read(h, 'p', k, &st.alts[st.nalts], sizeof(st.alts[0]));
         }
         size_t len = sizeof(s_good);
         if (nvs_get_str(h, WIFI_NVS_GOOD, s_good, &len) != ESP_OK) {
@@ -510,11 +520,29 @@ static void wifi_list_load(const hux_net_config_t *cfg) {
         }
         nvs_close(h);
     }
-    ESP_LOGI(TAG, "wifi.list compiled=%d saved=%d shadowed=%d good=\"%s\"", compiled,
-             s_nnets - compiled, s_nshadow, s_good);
+    hux_wifi_merge(s_nets, &s_nnets, &st, s_shadow, &s_nshadow);
+    memset(&st, 0, sizeof(st));
+    int staged = 0, second = 0;
+    for (int i = 0; i < s_nnets; i++) {
+        staged += s_nets[i].staged;
+        second += s_nets[i].pass2[0] != '\0';
+    }
+    ESP_LOGI(TAG, "wifi.list compiled=%d saved=%d staged=%d second=%d shadowed=%d good=\"%s\"",
+             compiled, s_nnets - compiled - staged, staged, second, s_nshadow, s_good);
 }
 
-/* The saved entries, rewritten as w0..w3 (a few blobs, only on a change). */
+static esp_err_t blob_write(nvs_handle_t h, char kind, int k, int n, const void *v, size_t size) {
+    char key[4];
+    snprintf(key, sizeof(key), "%c%d", kind, k);
+    if (k < n) {
+        return nvs_set_blob(h, key, v, size);
+    }
+    esp_err_t e = nvs_erase_key(h, key);
+    return e == ESP_ERR_NVS_NOT_FOUND ? ESP_OK : e;
+}
+
+/* The list as w0..w3 (reached the server: the old layout), s0..s3 (staged)
+ * and p0..p6 (second passwords), unused keys erased. Only on a change. */
 static bool wifi_list_save(void) {
     nvs_handle_t h;
     esp_err_t err = nvs_open(WIFI_NVS_NS, NVS_READWRITE, &h);
@@ -522,32 +550,18 @@ static bool wifi_list_save(void) {
         ESP_LOGE(TAG, "wifi.save_failed err=%s", esp_err_to_name(err));
         return false;
     }
-    int k = 0;
-    for (int i = 0; i < s_nnets && err == ESP_OK; i++) {
-        if (s_nets[i].compiled || k >= HUX_WIFI_SAVED_MAX) {
-            continue;
-        }
-        char key[4];
-        snprintf(key, sizeof(key), "w%d", k++);
-        wifi_saved_t w = {0};
-        memcpy(w.ssid, s_nets[i].ssid, sizeof(w.ssid));
-        memcpy(w.pass, s_nets[i].pass, sizeof(w.pass));
-        err = nvs_set_blob(h, key, &w, sizeof(w));
-        memset(&w, 0, sizeof(w));
-    }
-    for (int i = 0; i < s_nshadow && k < HUX_WIFI_SAVED_MAX && err == ESP_OK; i++) {
-        char key[4];
-        snprintf(key, sizeof(key), "w%d", k++);
-        err = nvs_set_blob(h, key, &s_shadow[i], sizeof(s_shadow[i]));
-    }
-    for (; k < HUX_WIFI_SAVED_MAX && err == ESP_OK; k++) {
-        char key[4];
-        snprintf(key, sizeof(key), "w%d", k);
-        esp_err_t e = nvs_erase_key(h, key);
-        if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND) {
-            err = e;
+    static hux_wifi_store_t st; /* the link lock: one writer; wiped after */
+    hux_wifi_split(s_nets, s_nnets, s_shadow, s_nshadow, &st);
+    for (int k = 0; k < HUX_WIFI_SAVED_MAX && err == ESP_OK; k++) {
+        err = blob_write(h, 'w', k, st.nsaved, &st.saved[k], sizeof(st.saved[k]));
+        if (err == ESP_OK) {
+            err = blob_write(h, 's', k, st.nstaged, &st.staged[k], sizeof(st.staged[k]));
         }
     }
+    for (int k = 0; k < HUX_WIFI_MAX && err == ESP_OK; k++) {
+        err = blob_write(h, 'p', k, st.nalts, &st.alts[k], sizeof(st.alts[k]));
+    }
+    memset(&st, 0, sizeof(st));
     if (err == ESP_OK) {
         err = nvs_commit(h);
     }
@@ -575,11 +589,26 @@ static void wifi_set_good(const char *ssid) {
     ESP_LOGW(TAG, "wifi.good ssid=\"%s\" saved=%s", ssid, esp_err_to_name(err));
 }
 
+/* The server reached through `idx` (F-0036): a staged entry becomes saved
+ * (w keys: an older image may join it now), a second password that got
+ * here becomes the first (a saved name; an older image then joins with
+ * it) or the preferred stored one (a compiled name). Saved only on a
+ * change. Caller holds the link lock. */
+static void wifi_confirm_locked(int idx) {
+    const char *what = hux_wifi_confirm(&s_nets[idx]);
+    if (what == NULL) {
+        return; /* nothing written on a plain hello */
+    }
+    bool ok = wifi_list_save();
+    ESP_LOGW(TAG, "wifi.confirmed ssid=\"%s\" what=%s nvs=%d", s_nets[idx].ssid, what, ok);
+}
+
 static bool wifi_apply_config(int idx) {
     wifi_config_t wc = {0};
     memcpy(wc.sta.ssid, s_nets[idx].ssid, strnlen(s_nets[idx].ssid, sizeof(wc.sta.ssid)));
-    memcpy(wc.sta.password, s_nets[idx].pass,
-           strnlen(s_nets[idx].pass, sizeof(wc.sta.password)));
+    const char *pass = s_nets[idx].alt && s_nets[idx].pass2[0] != '\0' ? s_nets[idx].pass2
+                                                                      : s_nets[idx].pass;
+    memcpy(wc.sta.password, pass, strnlen(pass, sizeof(wc.sta.password)));
     wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK; /* WPA2 or better */
     wc.sta.pmf_cfg.capable = true;
     wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH; /* WPA3-only networks too */
@@ -605,6 +634,8 @@ static bool wifi_join_locked(int idx, const char *why) {
     atomic_store(&s_wifi_hold, true);
     esp_timer_stop(s_wifi_retry_timer);
     s_wifi_retries = 0;
+    s_auth.fails = 0; /* a wrong-password run belongs to one network and password */
+    atomic_store(&s_flip_req, false);
     esp_err_t stop = esp_wifi_stop();
     /* Refused: the driver keeps the previous network's config, and so does
      * s_cur (an add then fails with why=config). */
@@ -616,9 +647,9 @@ static bool wifi_join_locked(int idx, const char *why) {
     atomic_store(&s_have_ip, false);
     atomic_store(&s_wifi_hold, false);
     esp_err_t start = esp_wifi_start();
-    ESP_LOGW(TAG, "wifi.join ssid=\"%s\" source=%s why=%s config=%d stop=%s start=%s",
-             s_nets[idx].ssid, net_source(idx), why, ok, esp_err_to_name(stop),
-             esp_err_to_name(start));
+    ESP_LOGW(TAG, "wifi.join ssid=\"%s\" source=%s password=%s why=%s config=%d stop=%s start=%s",
+             s_nets[idx].ssid, net_source(idx), s_nets[idx].alt ? "second" : "first", why, ok,
+             esp_err_to_name(stop), esp_err_to_name(start));
     return ok;
 }
 
@@ -712,10 +743,101 @@ static bool wifi_choose_locked(bool next, const char *why) {
     return false;
 }
 
+/* A staged name on trial (F-0036): it must reach the server (an IP alone
+ * isn't enough for an operator who isn't there) within the add's 30 s for
+ * an IP plus 60 s for the server; else back to the previous network, the
+ * entry kept staged (a tunnel blip mustn't throw away a network that
+ * works: it is tried again when the ranking picks it). */
+static void wifi_stage_trial_tick(uint32_t now) {
+    uint32_t ip_ms = atomic_load(&s_add_ip_ms);
+    if (atomic_load(&s_server_up) && ip_ms != 0 &&
+        (int32_t)(atomic_load(&s_hello_ms) - ip_ms) > 0) {
+        ESP_LOGW(TAG, "wifi.staged_try reached_server ssid=\"%s\" ms=%u", s_nets[s_add.idx].ssid,
+                 (unsigned)(now - s_add.since_ms));
+        atomic_store(&s_add_on, false);
+        return;
+    }
+    int fails = atomic_load(&s_add_auth_fails);
+    int reason = atomic_load(&s_add_last_reason);
+    const char *why = NULL;
+    if (ip_ms != 0) {
+        why = now - ip_ms >= WIFI_ADD_SERVER_MS ? "no_server" : NULL;
+    } else if (fails >= WIFI_AUTH_FAILS) {
+        why = "wrong_password";
+    } else if (reason == WIFI_REASON_NO_AP_FOUND_W_COMPATIBLE_SECURITY ||
+               reason == WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD) {
+        why = "security_too_weak";
+    } else if (reason == WIFI_REASON_802_1X_AUTH_FAILED) {
+        why = "enterprise_login";
+    } else if (now - s_add.since_ms >= WIFI_ADD_IP_MS) {
+        why = reason == WIFI_REASON_NO_AP_FOUND ? "not_heard" : fails > 0 ? "auth_failed" : "no_ip";
+    }
+    if (why == NULL || !link_lock_timed(10000)) {
+        return;
+    }
+    ESP_LOGW(TAG, "wifi.staged_try failed ssid=\"%s\" why=%s reason=%d auth_fails=%d: back to "
+                  "\"%s\", kept staged",
+             s_nets[s_add.idx].ssid, why, reason, fails, s_nets[s_add.prev].ssid);
+    atomic_store(&s_add_on, false);
+    wifi_join_locked(s_add.prev, "staged_try_failed");
+    link_unlock();
+}
+
+/* A staged name just added from afar: tried once now if a scan hears it
+ * (the operator learns whether the password works while the old network
+ * still does), else left for the ranking. The ladder task, never the app
+ * task (the join stops Wi-Fi under the reply). */
+static void wifi_stage_try(void) {
+    static hux_wifi_heard_t heard[WIFI_HEARD_MAX]; /* link lock: one user */
+    if (!link_lock_timed(10000)) {
+        atomic_store(&s_stage_req, true); /* the next tick */
+        return;
+    }
+    int idx = wifi_find(s_stage_name);
+    if (idx < 0 || !s_nets[idx].staged || atomic_load(&s_add_on)) {
+        link_unlock(); /* forgotten, confirmed or busy meanwhile */
+        return;
+    }
+    int nh = wifi_scan_locked(heard, WIFI_HEARD_MAX);
+    int rssi = INT8_MIN;
+    for (int i = 0; i < nh; i++) {
+        if (strcmp(heard[i].ssid, s_nets[idx].ssid) == 0 && heard[i].rssi > rssi) {
+            rssi = heard[i].rssi;
+        }
+    }
+    if (rssi == INT8_MIN || s_cur < 0) {
+        ESP_LOGW(TAG, "wifi.staged_try skipped ssid=\"%s\" why=%s: kept staged, joined when the "
+                      "ranking picks it",
+                 s_nets[idx].ssid, rssi == INT8_MIN ? "not_heard" : "no_current");
+        if (!atomic_load(&s_have_ip)) {
+            esp_wifi_connect(); /* the scan stopped a connect: resume it */
+        }
+        link_unlock();
+        return;
+    }
+    s_add.idx = idx;
+    s_add.prev = s_cur;
+    s_add.since_ms = now_ms();
+    s_add.saved = true;
+    s_add.remote = true;
+    atomic_store(&s_add_ip_ms, 0);
+    atomic_store(&s_add_auth_fails, 0);
+    atomic_store(&s_add_last_reason, 0);
+    atomic_store(&s_add_on, true);
+    ESP_LOGW(TAG, "wifi.staged_try start ssid=\"%s\" rssi=%d from=\"%s\"", s_nets[idx].ssid, rssi,
+             s_nets[s_cur].ssid);
+    wifi_join_locked(idx, "staged_try");
+    link_unlock();
+}
+
 /* The add under way, once per ladder tick: kept once it has an IP (the
  * server is reported, not required: the Pi or the tunnel may be down that
  * minute), dropped with the reason otherwise. */
 static void wifi_add_tick(uint32_t now) {
+    if (s_add.remote) {
+        wifi_stage_trial_tick(now);
+        return;
+    }
     uint32_t ip_ms = atomic_load(&s_add_ip_ms);
     if (ip_ms != 0 && !s_add.saved) {
         if (!link_lock_timed(10000)) {
@@ -791,6 +913,28 @@ static void wifi_tick(void) {
         wifi_add_tick(now);
         return;
     }
+    if (atomic_exchange(&s_stage_req, false)) {
+        wifi_stage_try();
+        return;
+    }
+    if (atomic_load(&s_flip_req)) {
+        if (!link_lock_timed(10000)) {
+            return; /* still asked: the next tick */
+        }
+        /* Three wrong-password failures in a row (F-0036): the other one,
+         * only for the network that failed, and only while it still has
+         * no IP (a join meanwhile clears the request). */
+        int idx = atomic_load(&s_flip_idx);
+        if (atomic_exchange(&s_flip_req, false) && idx == s_cur && s_cur >= 0 &&
+            s_nets[s_cur].pass2[0] != '\0' && !atomic_load(&s_have_ip)) {
+            s_nets[s_cur].alt = !s_nets[s_cur].alt;
+            ESP_LOGW(TAG, "wifi.password_switch ssid=\"%s\" to=%s", s_nets[s_cur].ssid,
+                     s_nets[s_cur].alt ? "second" : "first");
+            wifi_join_locked(s_cur, "wrong_password");
+        }
+        link_unlock();
+        return;
+    }
     if (!atomic_load(&s_have_ip) && s_nnets > 1 && now - atomic_load(&s_noip_ms) >= WIFI_RESCAN_MS &&
         link_lock_timed(10000)) {
         if (!atomic_load(&s_have_ip)) {
@@ -849,13 +993,28 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         if (atomic_exchange(&s_have_ip, false)) {
             atomic_store(&s_noip_ms, now_ms()); /* the 2 min count from here */
         }
+        bool auth_fail = reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+                         reason == WIFI_REASON_AUTH_FAIL || reason == WIFI_REASON_HANDSHAKE_TIMEOUT;
         if (atomic_load(&s_add_on)) {
             atomic_store(&s_add_last_reason, reason);
-            if (reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT || reason == WIFI_REASON_AUTH_FAIL ||
-                reason == WIFI_REASON_HANDSHAKE_TIMEOUT) {
+            if (auth_fail) {
                 atomic_fetch_add(&s_add_auth_fails, 1);
             } else if (reason != WIFI_REASON_ASSOC_LEAVE) {
                 atomic_store(&s_add_auth_fails, 0); /* "three in a row" */
+            }
+        } else if (reason != WIFI_REASON_ASSOC_LEAVE) {
+            int cur = s_cur;
+            bool second = cur >= 0 && cur < s_nnets && s_nets[cur].pass2[0] != '\0';
+            if (hux_wifi_auth_step(&s_auth, now_ms(), auth_fail, second)) {
+                atomic_store(&s_flip_idx, cur);
+                atomic_store(&s_flip_req, true); /* the ladder task switches (link lock) */
+                if (s_ladder_task != NULL) {
+                    xTaskNotifyGive(s_ladder_task);
+                }
+            }
+            if (auth_fail) {
+                ESP_LOGW(TAG, "wifi.auth_failed ssid=\"%s\" run=%d second=%d", cur >= 0 ? s_nets[cur].ssid : "",
+                         s_auth.fails, second);
             }
         }
         if (atomic_load(&s_wifi_hold)) {
@@ -881,6 +1040,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
         ESP_LOGI(TAG, "wifi.got_ip ip=" IPSTR " rssi=%d", IP2STR(&event->ip_info.ip),
                  hux_net_rssi());
         s_wifi_retries = 0;
+        s_auth.fails = 0; /* a join that works ends a wrong-password run */
         esp_timer_stop(s_wifi_retry_timer); /* a pending retry is moot now */
         atomic_store(&s_have_ip, true);
         if (atomic_load(&s_add_on) && s_cur == s_add.idx && atomic_load(&s_add_ip_ms) == 0) {
@@ -1041,7 +1201,63 @@ void hux_net_wifi_scan(void) {
     free(aps);
 }
 
-bool hux_net_wifi_add(const char *ssid, const char *pass) {
+/* The ladder task tries `ssid` (staged) once, if heard. Caller holds the lock. */
+static void wifi_stage_queue_locked(const char *ssid) {
+    strlcpy(s_stage_name, ssid, sizeof(s_stage_name));
+    atomic_store(&s_stage_req, true);
+    if (s_ladder_task != NULL) {
+        xTaskNotifyGive(s_ladder_task);
+    }
+}
+
+/* A staged name sent again with another password (a typo corrected): it
+ * never reached the server, so the password is replaced and tried again. */
+static bool wifi_restage_locked(int i, const char *pass) {
+    char old[sizeof(s_nets[i].pass)];
+    memcpy(old, s_nets[i].pass, sizeof(old));
+    strlcpy(s_nets[i].pass, pass, sizeof(s_nets[i].pass));
+    bool ok = wifi_list_save();
+    if (ok) {
+        wifi_stage_queue_locked(s_nets[i].ssid);
+    } else {
+        memcpy(s_nets[i].pass, old, sizeof(old));
+    }
+    memset(old, 0, sizeof(old));
+    return ok;
+}
+
+/* A new name from afar (F-0036): saved staged, never joined blind; the
+ * ladder task tries it once if heard. Caller holds the link lock. */
+static bool wifi_stage_locked(const char *ssid, const char *pass) {
+    hux_wifi_net_t *n = &s_nets[s_nnets];
+    memset(n, 0, sizeof(*n));
+    strlcpy(n->ssid, ssid, sizeof(n->ssid));
+    strlcpy(n->pass, pass, sizeof(n->pass));
+    n->staged = true;
+    s_nnets++;
+    if (!wifi_list_save()) {
+        memset(n, 0, sizeof(*n));
+        s_nnets--;
+        return false;
+    }
+    wifi_stage_queue_locked(ssid);
+    return true;
+}
+
+/* A known name's second password (F-0036): tried only after three
+ * wrong-password failures in a row on the first. Caller holds the lock. */
+static bool wifi_second_locked(int i, const char *pass) {
+    hux_wifi_net_t old = s_nets[i];
+    hux_wifi_second(&s_nets[i], pass);
+    bool ok = wifi_list_save();
+    if (!ok) {
+        s_nets[i] = old;
+    }
+    memset(&old, 0, sizeof(old));
+    return ok;
+}
+
+bool hux_net_wifi_add(const char *ssid, const char *pass, hux_wifi_src_t src) {
     size_t sl = strlen(ssid), pl = strlen(pass);
     ESP_LOGW(TAG, "wifi.add ssid=\"%s\" ssid_len=%u pass_len=%u", ssid, (unsigned)sl,
              (unsigned)pl); /* never the password */
@@ -1053,25 +1269,50 @@ bool hux_net_wifi_add(const char *ssid, const char *pass) {
     }
     if (sl < 1 || sl > 32 || pl < 8 || pl > 64 || (pl == 64 && !psk_hex)) {
         refused = "lengths"; /* a name of 1-32 bytes, a passphrase of 8-63, or a 64-hex key */
-    } else if (atomic_load(&s_add_on)) {
-        refused = "busy";
     }
+    hux_wifi_add_t plan = HUX_WIFI_ADD_REFUSED;
     if (refused == NULL) {
-        link_lock();
-        int saved = 0;
-        for (int i = 0; i < s_nnets; i++) {
-            saved += !s_nets[i].compiled;
+        /* Timed: from afar this runs on the supervised app task. */
+        if (!link_lock_timed(10000)) {
+            ESP_LOGW(TAG, "wifi.add refused why=link_busy");
+            return false;
         }
-        if (wifi_find(ssid) >= 0) {
-            refused = "known"; /* forget it first to change its password */
-        } else if (saved >= HUX_WIFI_SAVED_MAX || s_nnets >= HUX_WIFI_MAX) {
-            refused = "full";
+        /* Under the lock: a stage try sets s_add under it too. */
+        plan = atomic_load(&s_add_on) ? HUX_WIFI_ADD_REFUSED
+                                      : hux_wifi_add_plan(s_nets, s_nnets, ssid, pass, src);
+        if (atomic_load(&s_add_on)) {
+            refused = "busy";
+        } else if (plan == HUX_WIFI_ADD_RESTAGE) {
+            int i = wifi_find(ssid);
+            refused = wifi_restage_locked(i, pass) ? NULL : "nvs";
+            if (refused == NULL) {
+                ESP_LOGW(TAG, "wifi.add restaged ssid=\"%s\": its password replaced, queued, "
+                              "tried now if heard", ssid);
+            }
+        } else if (plan == HUX_WIFI_ADD_STAGE) {
+            refused = wifi_stage_locked(ssid, pass) ? NULL : "nvs";
+            if (refused == NULL) {
+                ESP_LOGW(TAG, "wifi.add staged ssid=\"%s\": queued, tried now if heard", ssid);
+            }
+        } else if (plan == HUX_WIFI_ADD_SECOND) {
+            int i = wifi_find(ssid);
+            refused = wifi_second_locked(i, pass) ? NULL : "nvs";
+            if (refused == NULL) {
+                ESP_LOGW(TAG, "wifi.add second ssid=\"%s\" source=%s: kept as its second "
+                              "password, tried after %d wrong-password failures in a row",
+                         ssid, net_source(i), HUX_WIFI_AUTH_FAILS);
+            }
+        } else if (plan == HUX_WIFI_ADD_SAME) {
+            ESP_LOGI(TAG, "wifi.add same ssid=\"%s\": it has that password already", ssid);
+        } else if (plan != HUX_WIFI_ADD_JOIN) {
+            refused = hux_wifi_add_name(plan);
         } else {
             hux_wifi_net_t *n = &s_nets[s_nnets];
+            memset(n, 0, sizeof(*n));
             strlcpy(n->ssid, ssid, sizeof(n->ssid));
             strlcpy(n->pass, pass, sizeof(n->pass));
-            n->compiled = false;
             s_add.idx = s_nnets++;
+            s_add.remote = false;
             s_add.prev = s_cur >= 0 ? s_cur : 0;
             s_add.since_ms = now_ms();
             s_add.saved = false;
@@ -1108,13 +1349,16 @@ bool hux_net_wifi_add(const char *ssid, const char *pass) {
     return true;
 }
 
-bool hux_net_wifi_forget(const char *ssid) {
-    link_lock();
+bool hux_net_wifi_forget(const char *ssid, hux_wifi_src_t src) {
+    if (!link_lock_timed(10000)) {
+        ESP_LOGW(TAG, "wifi.forget refused ssid=\"%s\" why=link_busy", ssid);
+        return false;
+    }
     int i = wifi_find(ssid);
-    const char *refused = i < 0                       ? "not_known"
-                          : s_nets[i].compiled        ? "compiled"
-                          : atomic_load(&s_add_on)    ? "busy"
-                                                      : NULL;
+    hux_wifi_forget_t plan = hux_wifi_forget_plan(s_nets, s_nnets, ssid, s_cur, src);
+    const char *refused = plan != HUX_WIFI_FORGET_OK ? hux_wifi_forget_name(plan)
+                          : atomic_load(&s_add_on)   ? "busy"
+                                                     : NULL;
     if (refused != NULL) {
         link_unlock();
         ESP_LOGW(TAG, "wifi.forget refused ssid=\"%s\" why=%s", ssid, refused);
@@ -1143,11 +1387,13 @@ bool hux_net_wifi_forget(const char *ssid) {
 bool hux_net_wifi_join(const char *ssid) {
     link_lock();
     int i = wifi_find(ssid);
-    bool ok = i >= 0 && !atomic_load(&s_add_on) && wifi_join_locked(i, "bench");
+    bool staged = i >= 0 && s_nets[i].staged;
+    bool ok = i >= 0 && !staged && !atomic_load(&s_add_on) && wifi_join_locked(i, "bench");
     link_unlock();
     if (!ok) {
+        /* A staged name is never joined blind: its trial comes back by itself. */
         ESP_LOGW(TAG, "wifi.join refused ssid=\"%s\" why=%s", ssid,
-                 i < 0 ? "not_known" : "busy_or_config");
+                 i < 0 ? "not_known" : staged ? "staged" : "busy_or_config");
     }
     return ok;
 }
@@ -1159,8 +1405,9 @@ void hux_net_wifi_list(void) {
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], s_nnets, s_good,
              atomic_load(&s_have_ip));
     for (int i = 0; i < s_nnets; i++) {
-        ESP_LOGI(TAG, "wifi.list.net ssid=\"%s\" source=%s good=%d active=%d", s_nets[i].ssid,
-                 net_source(i), strcmp(s_nets[i].ssid, s_good) == 0, i == s_cur);
+        ESP_LOGI(TAG, "wifi.list.net ssid=\"%s\" source=%s good=%d active=%d second=%d using=%s",
+                 s_nets[i].ssid, net_source(i), strcmp(s_nets[i].ssid, s_good) == 0, i == s_cur,
+                 s_nets[i].pass2[0] != '\0', s_nets[i].alt ? "second" : "first");
     }
 }
 
@@ -1842,6 +2089,7 @@ void hux_net_hello_ok(void) {
     atomic_store(&s_hello_ms, now_ms());
     if (s_cur >= 0) {
         wifi_set_good(s_nets[s_cur].ssid); /* reached the server through it */
+        wifi_confirm_locked(s_cur);
     }
     link_unlock();
 }

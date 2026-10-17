@@ -16,6 +16,7 @@
 #include "esp_err.h"
 
 #include "hux_log.h"
+#include "hux_wifi_list.h"
 
 typedef struct {
     /* Up to 3 compiled networks (F-0027's Wi-Fi list): the first is the
@@ -47,14 +48,20 @@ int hux_net_rssi(void);
  *  channel, width, signal. Blocking, about 2 s. */
 void hux_net_wifi_scan(void);
 
-/** The Wi-Fi list (F-0027), from the USB console only. `add`: join it now,
- * keep it once it gives an IP (`wifi.add saved`, then `server_reached` or
+/** The Wi-Fi list (F-0027, F-0036). A new name on USB: join it now, keep
+ * it once it gives an IP (`wifi.add saved`, then `server_reached` or
  * `no_server`), else back to the previous network (`wifi.add failed
- * why=`). False if refused at once (`wifi.add refused why=`). The password
- * is never logged. */
-bool hux_net_wifi_add(const char *ssid, const char *pass);
-/** Forget a network added on site (never a compiled one). */
-bool hux_net_wifi_forget(const char *ssid);
+ * why=`). A new name from the server: saved staged (`wifi.add staged`),
+ * tried once now if heard (`wifi.staged_try`: it must reach the server,
+ * else back, kept staged), confirmed by the first hello through it. A
+ * known name, from either: its second password (`wifi.add second`), tried
+ * after 3 wrong-password failures in a row (`wifi.password_switch`). The
+ * LAN door: refused. False if refused (`wifi.add refused why=`). The
+ * password is never logged. */
+bool hux_net_wifi_add(const char *ssid, const char *pass, hux_wifi_src_t src);
+/** Forget a saved or staged network (never a compiled one; from the
+ * server, never the one in use; never from the LAN door). */
+bool hux_net_wifi_forget(const char *ssid, hux_wifi_src_t src);
 /** Log the list (names, which is good and active, never passwords) and
  * the MAC address. */
 void hux_net_wifi_list(void);
