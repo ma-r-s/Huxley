@@ -388,6 +388,25 @@ class Watcher:
             )
             return None
 
+    def chat(self, which: str, now: datetime | None = None) -> bytes | None:
+        """The day as a conversation (web.py's /chat/YYYY-MM-DD.json, or
+        /chat/today.json); None for a day outside the logs, or one that
+        failed to build (logged)."""
+        if which == "today":
+            which = (now or datetime.now(UTC)).astimezone(self.cfg.timezone).date().isoformat()
+        try:
+            return self.archive.chat(self.cfg, which, now)
+        except Exception as exc:
+            frame = traceback.extract_tb(exc.__traceback__)[-1]
+            self.log.error(
+                "watch.step_failed",
+                step="archive_chat",
+                day=which,
+                error=type(exc).__name__,
+                at=f"{Path(frame.filename).name}:{frame.lineno}",
+            )
+            return None
+
     def current(self, now: datetime | None = None) -> tuple[bytes, bytes]:
         """The page and JSON to serve now: rebuilt as "stopped checking"
         if the last cycle is too old (the loop died or hangs)."""

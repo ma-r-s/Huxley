@@ -19,7 +19,7 @@ from collections import OrderedDict
 from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
-from huxley_watch import archive, daylist
+from huxley_watch import archive, chat, daylist
 from huxley_watch.activity import segments
 from huxley_watch.bench import BenchReader
 from huxley_watch.daylog import AFTER, MARGIN, DayReader
@@ -120,6 +120,7 @@ def shape(found: Sequence[archive.Row], midnight: datetime, tz: ZoneInfo) -> lis
                 "end": _clock(r.end, day, tz) if r.end else None,
                 "seconds": round((r.end - r.ts).total_seconds()) if r.end else None,
                 "bench": r.bench,
+                "live": r.live,
             }
         )
     return out
@@ -163,6 +164,33 @@ class Archive:
             if day is None or not min([*covered, today]) <= day <= today:
                 return None
             return self.build(cfg, reader, day, now, covered)
+
+    def chat(self, cfg: Config, which: str, now: datetime | None = None) -> bytes | None:
+        """The day as a conversation (chat.py), for the phone app's chat:
+        built on every ask (about 50 ms for a busy day on the Pi), so the
+        app can poll today. None for a day outside the logs or not a date."""
+        now = now or datetime.now(UTC)
+        data = self.view(cfg, which, now)
+        if data is None:
+            return None
+        local = now.astimezone(cfg.timezone)
+        now_t = None
+        if data["is_today"]:
+            midnight = datetime.combine(local.date(), time(0), cfg.timezone)
+            now_t = (now - midnight).total_seconds() / 60
+        prev = _parse(data["prev"]) if data["prev"] else None
+        body = {
+            "schema": 1,
+            "date": data["date"],
+            "label": data["label"],
+            "today": local.date().isoformat(),
+            "is_today": data["is_today"],
+            "prev": data["prev"],
+            "prev_label": prev.strftime("%a %d %b") if prev else None,
+            "next": data["next"],
+            "items": chat.items(data["rows"], now_t),
+        }
+        return json.dumps(body, ensure_ascii=False).encode("utf-8")
 
     def day(self, cfg: Config, which: str, now: datetime | None = None) -> bytes | None:
         """The JSON the page fetches: the strip's and the list's markup and

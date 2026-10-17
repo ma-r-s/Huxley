@@ -157,6 +157,41 @@ def test_the_served_day_is_the_markup_and_the_pickers_fields(tmp_path: Path) -> 
     )
 
 
+def test_the_chat_is_the_day_as_turns_and_events(tmp_path: Path) -> None:
+    """/chat/<day>.json from real-shaped logs: the call with both sides'
+    recordings, his press with its words, the day's names from the server."""
+    logs(tmp_path)
+    cfg, arch = cfg_for(tmp_path), Archive(WatchLog(None))
+    body = arch.chat(cfg, "2026-10-12", NOW)
+    assert body is not None
+    got = json.loads(body)
+    assert (got["date"], got["today"], got["is_today"]) == ("2026-10-12", "2026-10-12", True)
+    assert got["prev"] == "2026-10-11" and got["prev_label"] == "Sun 11 Oct"
+    call = next(i for i in got["items"] if i.get("kind") == "call")
+    assert call["title"] == "Mario" and len(call["clips"]) == 2 and call["live"] is False
+    last = [i for i in got["items"] if i["type"] == "turn"][-1]
+    assert last["him"]["text"] == "Pon la radio." and len(last["him"]["clips"]) == 1
+    assert arch.chat(cfg, "2026-10-30", NOW) is None
+
+
+def test_a_stream_still_playing_is_live(tmp_path: Path) -> None:
+    write(
+        tmp_path / "logs" / "huxley.log",
+        by_time(
+            flat(
+                starting(utc(12, 18)),
+                walkie_session(utc(12, 18), NOW, "w2"),
+                stream_started(utc(12, 19, 50), "s9", "Caracol Radio"),
+            )
+        ),
+    )
+    cfg, arch = cfg_for(tmp_path), Archive(WatchLog(None))
+    body = arch.chat(cfg, "2026-10-12", NOW)
+    assert body is not None
+    (ev,) = [i for i in json.loads(body)["items"] if i["type"] == "event"]
+    assert (ev["title"], ev["live"], ev["end"]) == ("Caracol Radio", True, None)
+
+
 def test_a_day_reads_only_the_files_that_reach_it(tmp_path: Path) -> None:
     logs(tmp_path)
     cfg, arch = cfg_for(tmp_path), Archive(WatchLog(None))

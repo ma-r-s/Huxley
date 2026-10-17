@@ -201,33 +201,66 @@ stopped watcher. Without JavaScript the meta refresh still applies.
 
 ## The phone app
 
-`/app/` (T1.46): how he uses the walkie, as an iPhone home-screen app. No
-device controls; the reliability lives on `/`, one tap from the app's
-device row. One HTML file (`src/huxley_watch/static/app.html`): inline CSS
-and JavaScript, no build step, nothing from the internet, so it works on
-the tailnet without one. It draws only what `/app.json` says, fetched on
-open, every 60 s while it is on screen, and on a pull at the top.
+`/app/` (T1.46, redesigned 2026-10-17): his conversations with the walkie,
+and how he uses it, as an iPhone home-screen app. No device controls. One
+HTML file (`src/huxley_watch/static/app.html`): inline CSS and JavaScript,
+no build step, nothing from the internet, so it works on the tailnet
+without one. Colours "Ink & paper" (warm paper, deep navy for him, white
+for the walkie, burnt orange for what it did), with a dark version that
+follows the phone.
 
 **Add it to the iPhone**: on the tailnet, open
 `http://<the box's Tailscale address>:8780/app/` in Safari, Share, Add to
 Home Screen. It opens full screen as "Walkie", light or dark with the phone.
 
-Four tabs, one scrolling screen each:
+The header, on every tab: "Abuelo", online or offline since, what's
+playing, and the battery (from `/app.json`, every 30 s). Four tabs:
 
-- **Today**: "updated HH:MM" (grey once the watcher stopped checking or the
-  box can't be reached); **last used**, big ("40 min ago"), with the time
-  and what he asked (his words, else the tool and its query, or "not
-  heard": a hallucinated transcript is never shown as his words); **used
-  today** against his usual range by this time of day, a band and a mark,
-  never red, and "walkie offline N% of the day so far" once that is 5 % or
-  more of today's daytime; **people**: each person's last call, its time
-  and length ("talked 2 d ago", or "called" when it lasted under 20 s: it
-  didn't connect);
-  **enjoying now** (or last played): the track and artist, the station, or
-  the book with its chapter ("ch. 5 of 19"); a device row (walkie online
-  or offline since, battery) that opens `/`. While the walkie is offline,
-  "walkie offline since HH:MM" sits under "last used".
-- **Trends**: minutes used each of the last 7 days; a day the walkie was
+- **Chat** (opens here): the day as a conversation, from
+  `/chat/<YYYY-MM-DD|today>.json` (`chat.py`), oldest at the top, opening
+  on the latest at the bottom; today is fetched again every 5 s while the
+  app is on screen and new messages are added below (a "New messages"
+  button when you've scrolled up, "Live" at the end otherwise). Him on the
+  right in navy, the walkie on the left in white; each bubble holds the
+  words and the recording (play inside it, with its length and time);
+  what the walkie did sits above its answer as plain sentences ("Turned on
+  Caracol Radio", "Played Leo Dan on Spotify", not tool names); music, a
+  book, the radio and calls sit between messages with their times (a call
+  with both sides' recordings; the radio pausing for a question and coming
+  back is one listening). A press nobody heard says "Didn't catch it" with
+  an amber edge; the walkie speaking by itself (a reminder, a call
+  announced) is labelled so. The top of a day links to the day before;
+  a past day has "Back to today". `#chat/<day>@<minutes>` opens a day on
+  one moment, highlighted (the Summary's struggles link there).
+- **Summary**: last used, used today against his usual range, struggles
+  today (each opens the chat at that moment), playing now, people, the
+  week's minutes, favourites, when he usually starts, and every day's
+  conversations (each opens that day's chat).
+- **Books**: reading now, finished, left halfway, what's left on the shelf.
+- **Walkie**: the device's health from `/status.json` (all good or what
+  needs you, then walkie, battery, Wi-Fi, server, audio gaps, OpenAI) and
+  a link to the full page at `/`.
+
+`chat.py` pairs by time, the way the server logs them: his press starts a
+turn with its recording; his words join it up to 30 s later (they're
+transcribed after the release, sometimes after the walkie's answer); the
+tools, the walkie's words and its recording join within 90 s, unless the
+walkie already answered over 20 s before (then it is speaking on its own,
+a turn of its own). Built on each ask (about 50 ms for a busy day on the
+Pi), never kept: neither the server nor the phone stores a conversation
+(the service worker never touches `/chat/`, `/day/` or `/audio/`).
+
+The older details, still true for the Summary:
+
+- **Today** (now the Summary's top): "last used", big ("40 min ago"), with
+  the time and what he asked (his words, else the tool and its query, or
+  "not heard": a hallucinated transcript is never shown as his words);
+  **used today** against his usual range by this time of day, a band and
+  a mark, never red, and "walkie offline N% of the day so far" once that
+  is 5 % or more of today's daytime; **people**: each person's last call,
+  its time and length ("talked 2 d ago", or "called" when it lasted under
+  20 s: it didn't connect).
+- **The week**: minutes used each of the last 7 days; a day the walkie was
   mostly offline in the daytime is hatched and labelled "walkie offline",
   never drawn as a short bar; the day the logs begin, "logs begin"; days
   before, "no logs". Today's bar says "so far". His usual day as a band
@@ -236,13 +269,6 @@ Four tabs, one scrolling screen each:
   its chapter) and the station. **Usually first uses it at**: the median
   first press over the days his usual is read from (the last 28 with full
   logs and the walkie mostly online), once 5 of them have a press.
-- **Talks**: **struggles today**, "3 of 41" requests, newest first: what he
-  said, the reasons, a tap to that moment in the day's words.
-  **Conversations by day**, today first, with the requests and struggles,
-  "walkie offline", "logs begin" and a battery under `battery_low_pct`
-  marked; a tap opens the
-  day's words from `/day/YYYY-MM-DD.json` (the archive's list, without the
-  recordings' players).
 
 **Honesty rules** (the design critic's, binding):
 

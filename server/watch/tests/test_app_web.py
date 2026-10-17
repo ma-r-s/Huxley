@@ -162,15 +162,15 @@ def test_the_page_is_self_contained() -> None:
 
 
 def test_the_page_never_keeps_a_days_words() -> None:
-    """Days are fetched with no-store, and the worker caches only the shell
-    and the last /app.json, never /day/ or /audio/."""
+    """Conversations are fetched with no-store, and the worker caches only
+    the shell and the last /app.json, never /chat/, /day/ or /audio/."""
     page = app_file("app.html").decode()
-    assert re.search(r"fetch\(`\.\./day/[^`]+`, \{cache: \"no-store\"\}\)", page)
+    assert re.search(r"fetch\(`\.\./chat/[^`]+`, \{cache: \"no-store\"\}\)", page)
     assert "localStorage" not in page and "indexedDB" not in page
     assert "isSecureContext" in page
     worker = app_file("sw.js").decode()
     code = re.sub(r"/\*.*?\*/|//[^\n]*", "", worker, flags=re.S)  # the comments name them
-    assert "/day" not in code and "audio" not in code
+    assert "/day" not in code and "/chat" not in code and "audio" not in code
     assert "respondWith" in code and "APP_JSON" in code
     # The offline copy of /app.json is kept without his words.
     assert "fresh(event.request, DATA, APP_JSON, wordless)" in code

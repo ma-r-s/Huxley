@@ -52,6 +52,7 @@ class Row:
     ms: int | None = None  # rec: its length
     end: datetime | None = None  # stream, call
     bench: bool = False
+    live: bool = False  # stream, call: still open now (its end is now)
 
 
 def within(ts: datetime, spans: Sequence[Span], tail: timedelta = timedelta(0)) -> bool:
@@ -167,8 +168,9 @@ def plays(events: Sequence[Event], now: datetime, spans: Sequence[Span]) -> list
                     unnamed.clear()
         previous = e.ts
     for sid in list(open_):
-        stream(sid, now)
+        start, label = open_.pop(sid)
+        out.append(Row(start, "stream", kinds.get(sid, "music"), label, end=now, live=True))
     if call is not None:
-        out.append(Row(call[0], "call", text=call[1], end=now))
+        out.append(Row(call[0], "call", text=call[1], end=now, live=True))
     # Only what played to the walkie (one client at a time).
     return [r for r in out if r.end is not None and overlaps(r.ts, r.end, spans)]

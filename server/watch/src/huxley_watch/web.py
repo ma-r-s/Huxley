@@ -1,5 +1,6 @@
 """A tiny read-only HTTP server for the page: `/`, `/status.json`, the
-archive's days (`/day/YYYY-MM-DD.json`) and its recordings
+archive's days (`/day/YYYY-MM-DD.json`), a day as a conversation for the
+phone app (`/chat/YYYY-MM-DD.json` or `/chat/today.json`) and its recordings
 (`/audio/<path under the recordings dir>`), and the phone app (T1.46):
 `/app.json` and `/app/` with its manifest, icons and service worker,
 nothing else. The standard library's threading server is enough for one
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from huxley_watch.cycle import Watcher
 
 _DAY = re.compile(r"^/day/(\d{4}-\d{2}-\d{2})\.json$")
+_CHAT = re.compile(r"^/chat/(\d{4}-\d{2}-\d{2}|today)\.json$")
 # The phone app's files (static/, package data): path -> (file, type, cache).
 # Its HTML, manifest and worker are checked on every open (an update reaches
 # a home-screen app at once); the icons change only with a new install.
@@ -102,6 +104,12 @@ def make_server(watcher: Watcher, host: str, port: int) -> ThreadingHTTPServer:
             elif path == "/status.json":
                 _, status = watcher.current()
                 self._send(status, "application/json; charset=utf-8")
+            elif m := _CHAT.match(path):
+                body = watcher.chat(m.group(1))
+                if body is None:
+                    self._not_found()
+                else:
+                    self._send(body, "application/json; charset=utf-8")
             elif m := _DAY.match(path):
                 body = watcher.day(m.group(1))
                 if body is None:

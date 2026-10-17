@@ -45,6 +45,15 @@ ICONS: dict[str, tuple[bool, str]] = {
         'A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
     ),
     "bell": (False, '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/>'),
+    "cloud": (
+        False,
+        '<path d="M7 18h10a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6 1.4A3.3 3.3 0 0 0 7 18z"/>',
+    ),
+    "message": (
+        False,
+        '<path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 3.5V17.2A2.5 2.5 0 0 1 4 14.5z"/>',
+    ),
+    "chat": (False, '<path d="M5 19V7a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H9l-4 3z"/>'),
     "volume": (
         False,
         '<path d="M4 9h4l5-4v14l-5-4H4z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a8 8 0 0 1 0 11"/>',
