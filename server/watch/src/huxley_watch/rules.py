@@ -373,14 +373,38 @@ def rule_walkie_offline(i: Inputs) -> Item | None:
         and i.now - counted < timedelta(days=i.th.not_seen_days)
     ):
         return None
+    chip = "Check charger"
+    action = "Check it's charged and switched on, or ask someone there to look at it."
+    b = i.battery
+    if (
+        w.since is not None
+        and b.pct is not None
+        and b.at is not None
+        and timedelta(0) <= w.since - b.at <= OFFLINE_BATTERY_WINDOW
+    ):
+        # What the battery said as it went away tells which call to make:
+        # its power switch cuts the battery (T1.57), so a walkie that went
+        # off with charge left was switched off, and switched off it
+        # doesn't charge.
+        if b.pct >= OFFLINE_FLAT_PCT:
+            sentence += f" It had {b.pct} % battery, so it was most likely switched off."
+            chip = "Switch it on"
+            action = (
+                "Ask someone there to switch it on. It only charges while switched on, "
+                "so leave it on when it's plugged in."
+            )
+        else:
+            sentence += f" Its battery was at {b.pct} %: it most likely ran flat."
+            chip = "Charge it"
+            action = "Ask someone there to plug it in and switch it on: it only charges while on."
     return Item(
         "walkie.offline",
         "Walkie offline",
         short(i.now - start),
-        "Check charger",
+        chip,
         sentence,
         "He can't use it, and nothing reaches him until it's back.",
-        "Check it's charged and switched on, or ask someone there to look at it.",
+        action,
         "The walkie is back online.",
         start,
         "crit",
@@ -862,6 +886,10 @@ def rule_disk(i: Inputs) -> Item | None:
 
 
 BATTERY_STALE = timedelta(hours=2)  # older says nothing about now
+# The walkie's last battery reading this close before it went away says
+# why it went: with this much left it was switched off, below it ran flat.
+OFFLINE_BATTERY_WINDOW = timedelta(minutes=30)
+OFFLINE_FLAT_PCT = 10
 
 
 def battery_cut_off(i: Inputs) -> bool:

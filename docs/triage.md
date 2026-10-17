@@ -6295,5 +6295,5 @@ Not fixable here: he wants "Mi alma se la dejo al diablo", which Spotify CO does
 
 **Fix (on site)**: battery permanently on the charger/protection board; the switch after it, cutting only the board's supply (or the board's enable line). Off is then silent and still charges. Consider also whether off should keep Wi-Fi and calls with the speaker muted (a firmware "quiet off" with a soft switch): a product call for Mario.
 
-**Meanwhile**: persona (es/en/fr) tells him to leave it switched ON while it charges (the battery warning and any charging question).
+**Meanwhile**: persona (es/en/fr) tells him to leave it switched ON while it charges (the battery warning and any charging question). The watch's "walkie offline" alert now says why from its last battery reading (within 30 min of going away): with 10 % or more, "most likely switched off" (chip "Switch it on", "it only charges while switched on"); under 10 %, "most likely ran flat" (chip "Charge it"). Missed calls, Telegram messages and reminders already wait for it to come back (reminders within their late window, then "missed" in his next conversation).
 

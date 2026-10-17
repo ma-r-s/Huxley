@@ -80,6 +80,43 @@ def test_walkie_offline_20_min_in_the_day_opens() -> None:
     assert "charged" in item.action
 
 
+def test_walkie_offline_with_charge_left_was_switched_off() -> None:
+    # Its switch cuts the battery (T1.57): off with 51 % left on 10-17.
+    lines = flat(
+        BOOT,
+        walkie_session(ago(hours=2), ago(minutes=20), "w1"),
+        line("client.system.battery", ago(minutes=25), mv=3800, pct=51, conn_id="w1"),
+        disconnected(ago(minutes=20), "w1"),
+    )
+    item = rule_walkie_offline(inputs(lines))
+    assert item is not None
+    assert item.sentence.endswith("It had 51 % battery, so it was most likely switched off.")
+    assert item.chip == "Switch it on" and "only charges while switched on" in item.action
+
+
+def test_walkie_offline_with_an_empty_battery_ran_flat() -> None:
+    lines = flat(
+        BOOT,
+        walkie_session(ago(hours=2), ago(minutes=20), "w1"),
+        line("client.system.battery", ago(minutes=22), mv=3420, pct=4, conn_id="w1"),
+        disconnected(ago(minutes=20), "w1"),
+    )
+    item = rule_walkie_offline(inputs(lines))
+    assert item is not None and item.chip == "Charge it"
+    assert item.sentence.endswith("Its battery was at 4 %: it most likely ran flat.")
+
+
+def test_walkie_offline_with_an_old_reading_says_nothing_of_why() -> None:
+    lines = flat(
+        BOOT,
+        walkie_session(ago(hours=2), ago(minutes=20), "w1"),
+        line("client.system.battery", ago(hours=1, minutes=30), mv=3800, pct=51, conn_id="w1"),
+        disconnected(ago(minutes=20), "w1"),
+    )
+    item = rule_walkie_offline(inputs(lines))
+    assert item is not None and item.sentence == "The walkie hasn't connected since 14:40."
+
+
 def test_walkie_offline_10_min_is_not_yet_an_item() -> None:
     lines = flat(
         BOOT,

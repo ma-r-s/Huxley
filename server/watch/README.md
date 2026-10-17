@@ -395,7 +395,7 @@ card.
 
 | Item                   | Opens when                                                                                                     | Clears when                                           |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `walkie.offline`       | the walkie (client.device shell=firmware) away 15 min of daytime (07:00-22:00), or 2 days at all; not after a battery cutoff | it connects                                     |
+| `walkie.offline`       | the walkie (client.device shell=firmware) away 15 min of daytime (07:00-22:00), or 2 days at all; not after a battery cutoff. Says why from the last battery reading (within 30 min): 10 % or more "switched off", less "ran flat" (its switch cuts the battery, T1.57) | it connects                                     |
 | `battery.low`          | the walkie's last `system.battery` reading is under 20 % (critical under 10 %)                                 | back at 30 % (an old reading keeps it open)           |
 | `battery.empty`        | the walkie's last reading carried `cutoff: true` (F-0030) and it's offline; critical, replaces `walkie.offline` | it connects                                           |
 | `audio.gaps`           | gaps 5 % or more of the speaker's playing time over 3 h (at least 2 min played)                                | under 60 % of that threshold                          |
