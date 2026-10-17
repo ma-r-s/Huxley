@@ -861,7 +861,7 @@ def test_the_schema1_hello_identifies_the_walkie() -> None:
         ago(minutes=30),
         schema=1,
         protocol=2,
-        device_id="44:1b:f6:85:26:80",
+        device_id="02:00:00:00:00:01",
         board="esp32s3-audio-board",
         version="4dddec8c-otatest",
         slot_state="pending_verify",
@@ -870,7 +870,7 @@ def test_the_schema1_hello_identifies_the_walkie() -> None:
     )
     health = line("client.device.health", ago(minutes=1), rssi=-31, conn_id="w9")
     lines = [BOOT, line("client_connected", ago(minutes=30), conn_id="w9"), hello, health]
-    i = inputs(lines, walkie_mac="44:1b:f6:85:26:80")
+    i = inputs(lines, walkie_mac="02:00:00:00:00:01")
     assert i.walkie.online is True
     assert i.walkie.version == "4dddec8c-otatest"
     assert i.walkie.rssi == -31

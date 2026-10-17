@@ -17,8 +17,8 @@ from huxley_watch.rules import Inputs, make_inputs
 TZ = ZoneInfo("America/Bogota")  # UTC-5, no DST
 # Monday 2026-10-12 15:00 local
 NOW = datetime(2026, 10, 12, 20, 0, tzinfo=UTC)
-WALKIE_MAC = "44:1b:f6:85:26:80"
-TWIN_MAC = "a0:f2:62:e2:fb:60"
+WALKIE_MAC = "02:00:00:00:00:01"
+TWIN_MAC = "02:00:00:00:00:02"
 
 
 def iso(ts: datetime) -> str:

@@ -87,7 +87,7 @@ ADMIN = Headers({"X-Huxley-Admin": ADMIN_SECRET, "Host": "127.0.0.1:8765"})
 def hello(**fields: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "schema": 1,
-        "device_id": "a0:f2:62:e2:fb:60",
+        "device_id": "02:00:00:00:00:02",
         "version": "v1",
         "elf_sha": "111111111",
         "slot": "ota_0",

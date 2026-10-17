@@ -147,7 +147,7 @@ class TestWho:
         ("event", "data"),
         [
             ("device", {"shell": "firmware", "board": "esp32s3-audio-board"}),
-            ("device.hello", {"schema": 1, "device_id": "44:1b:f6:85:26:80"}),
+            ("device.hello", {"schema": 1, "device_id": "02:00:00:00:00:01"}),
         ],
     )
     async def test_walkie_last_seen_follows_a_firmware_client(

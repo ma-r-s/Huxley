@@ -15,9 +15,9 @@
 # db = "/home/mario/huxley-data/abuelos.db"   # default: <persona_dir>/data/<name>.db
 # The recorder's Ogg files, served read-only to the archive's players.
 # recordings_dir = "/home/mario/huxley-data/recordings"   # default: recordings/ next to the db
-# Only this board counts as the walkie (the twin board is a0:f2:62:e2:fb:60).
+# Only this board counts as the walkie (the twin board is 02:00:00:00:00:02).
 # Default: any client whose client.device says shell=firmware.
-# walkie_mac = "44:1b:f6:85:26:80"
+# walkie_mac = "02:00:00:00:00:01"
 # Is the server process up? The pid in logs/huxley-<port>.lock (read only,
 # same box only), or the server's /health once it has one (T1.43 W1).
 # check_pid = true

@@ -94,7 +94,7 @@ def test_add_refuses_a_mismatched_password(tmp_path: Path) -> None:
     assert calls == []
 
 
-@pytest.mark.parametrize("password", ["short", "x" * 65])
+@pytest.mark.parametrize("password", ["", "short", "x" * 65])
 def test_add_refuses_a_password_wifi_cannot_have(tmp_path: Path, password: str) -> None:
     done, calls = _run(tmp_path, ["add", SSID], stdin=f"{password}\n{password}\ny\n")
     assert done.returncode == 2

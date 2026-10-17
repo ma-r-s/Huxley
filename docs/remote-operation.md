@@ -102,9 +102,10 @@ walkie --2.4 GHz--> their router --> wss://<host> (Cloudflare edge) --tunnel--> 
    a separate process (`huxley-watch`) so it keeps alerting when the voice
    server is down and can never glitch audio. Tailscale only. It never opens
    the voice socket.
-10. **The twin board goes first.** The original Huxley board (a0:f2:62:e2:fb:60)
-    runs every firmware against the dev server over the same public path;
-    the walkie in the case is 44:1b:f6:85:26:80.
+10. **The twin board goes first.** The original Huxley board runs every
+    firmware against the dev server over the same public path; the walkie
+    in the case is the one named by `walkie_mac` in the Pi's watch.toml
+    (device MACs stay out of the repo).
 
 ## Workstreams
 

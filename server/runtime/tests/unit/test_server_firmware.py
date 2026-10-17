@@ -92,7 +92,7 @@ def _hello(**fields: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "schema": 1,
         "protocol": 2,
-        "device_id": "a0:f2:62:e2:fb:60",
+        "device_id": "02:00:00:00:00:02",
         "board": "esp32s3-audio-board",
         "version": "v1",
         "elf_sha": "111111111",

@@ -49,11 +49,16 @@ if [ "$cmd" = forget ]; then
   exit 0
 fi
 
-IFS= read -r -s -p "Password for \"$ssid\" (empty for an open network): " pw; echo >&2
+IFS= read -r -s -p "Password for \"$ssid\": " pw; echo >&2
 IFS= read -r -s -p "Again: " pw2; echo >&2
 [ "$pw" = "$pw2" ] || { echo "the two didn't match: nothing sent" >&2; exit 2; }
 n=$(printf '%s' "$pw" | wc -c | tr -d ' ')
-if [ "$n" -ne 0 ] && { [ "$n" -lt 8 ] || [ "$n" -gt 64 ]; }; then
+if [ "$n" -eq 0 ]; then
+  # The walkie joins WPA2 or better only (F-0036): no open networks.
+  echo "the walkie only joins networks with a password (WPA2 or better): nothing sent" >&2
+  exit 2
+fi
+if [ "$n" -lt 8 ] || [ "$n" -gt 64 ]; then
   echo "a Wi-Fi password is 8 to 64 characters (this one: $n): nothing sent" >&2
   exit 2
 fi
