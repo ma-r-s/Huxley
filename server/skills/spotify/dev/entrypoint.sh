@@ -25,6 +25,18 @@ pulseaudio --daemonize=yes --exit-idle-time=-1 --disallow-exit -n --log-target=s
   --load="module-simple-protocol-tcp port=4712 listen=0.0.0.0 record=true playback=false source=huxley_spotify.monitor format=s16le rate=24000 channels=1"
 pactl set-default-sink huxley_spotify
 
+# After a power cut the box boots before its network and clock are up:
+# Soloist tried its one login then ("login failed: make sure --api-key is
+# valid") and never again, three days without music (2026-10-14 to 10-17).
+# Wait until Spotify answers before fetching or starting anything.
+tries=0
+until curl -fsS -o /dev/null --max-time 5 https://apresolve.spotify.com/; do
+  [ $((tries % 12)) -eq 0 ] && echo "entrypoint: waiting for Spotify to be reachable (${tries}x5 s so far)" >&2
+  tries=$((tries + 1))
+  sleep 5
+done
+[ "$tries" -gt 0 ] && echo "entrypoint: Spotify reachable after $((tries * 5)) s" >&2
+
 # Current build from Spotify, re-fetched only if newer (If-Modified-Since).
 # Always download to .new and move into place: a partial first download
 # must not become the file that -z compares against forever.
