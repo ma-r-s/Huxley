@@ -1,14 +1,14 @@
 {
   "name": "Walkie",
   "short_name": "Walkie",
-  "description": "How he uses the walkie: today, trends, talks.",
+  "description": "His conversations with the walkie, and how he uses it.",
   "start_url": "/app/",
   "scope": "/app/",
   "display": "standalone",
-  "background_color": "#f4f3ef",
-  "theme_color": "#f4f3ef",
+  "background_color": "#f6f3ec",
+  "theme_color": "#fbf9f4",
   "user_preferences": {
-    "color_scheme_dark": {"background_color": "#0d0d0d", "theme_color": "#0d0d0d"}
+    "color_scheme_dark": {"background_color": "#12141a", "theme_color": "#171a21"}
   },
   "icons": [
     {"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},

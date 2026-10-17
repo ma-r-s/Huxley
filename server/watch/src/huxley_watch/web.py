@@ -13,6 +13,8 @@ from __future__ import annotations
 import contextlib
 import functools
 import gzip
+import hashlib
+import json
 import re
 import socket
 import threading
@@ -44,16 +46,28 @@ APP_FILES = {
     "/app/icon-512.png": ("icon-512.png", "image/png", "max-age=604800"),
 }
 SPRITE_MARK = b"<!--SPRITE-->"
+VERSION_MARK = b"__APP_VERSION__"
 
 
 @functools.cache
 def app_file(name: str) -> bytes:
     """A file of the phone app, read once; the HTML gets the icon sprite
-    (the same symbols as the page, icons.py)."""
+    (the same symbols as the page, icons.py) and its own version."""
     body = (resources.files("huxley_watch") / "static" / name).read_bytes()
     if name == "app.html":
         body = body.replace(SPRITE_MARK, sprite().encode("utf-8"))
+        body = body.replace(VERSION_MARK, app_version().encode("ascii"))
     return body
+
+
+@functools.cache
+def app_version() -> str:
+    """The app's version: its HTML's hash. A home-screen app on iOS resumes
+    the page it had instead of loading the new one (2026-10-17: the old app
+    after the redesign); the page asks /app/version.json when it comes
+    back and reloads itself when this changed."""
+    raw = (resources.files("huxley_watch") / "static" / "app.html").read_bytes()
+    return hashlib.sha256(raw).hexdigest()[:12]
 
 
 def make_server(watcher: Watcher, host: str, port: int) -> ThreadingHTTPServer:
@@ -91,6 +105,9 @@ def make_server(watcher: Watcher, host: str, port: int) -> ThreadingHTTPServer:
                 self._send(watcher.current_app(), "application/json; charset=utf-8")
             elif path == "/app":
                 self._redirect("/app/")
+            elif path == "/app/version.json":
+                ver = json.dumps({"version": app_version()}).encode("utf-8")
+                self._send(ver, "application/json; charset=utf-8")
             elif path in APP_FILES:
                 name, content_type, cache = APP_FILES[path]
                 shell = app_file(name)

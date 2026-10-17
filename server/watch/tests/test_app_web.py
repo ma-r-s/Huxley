@@ -128,6 +128,19 @@ def test_unknown_app_paths_are_404(served: tuple[str, Watcher]) -> None:
         assert err.value.code == 404, path
 
 
+def test_the_app_knows_its_version_and_asks_for_the_servers(served: tuple[str, Watcher]) -> None:
+    """iOS resumed the old app after the redesign (2026-10-17): the page
+    carries its hash and reloads when /app/version.json says otherwise."""
+    base, _ = served
+    resp, body = get(base + "/app/version.json")
+    assert resp.headers["Cache-Control"] == "no-store"
+    version = json.loads(body)["version"]
+    assert len(version) == 12
+    _, page = get(base + "/app/")
+    assert f'const VERSION = "{version}";' in page.decode()
+    assert "__APP_VERSION__" not in page.decode()
+
+
 def test_manifest() -> None:
     m = json.loads(app_file("manifest.webmanifest"))
     assert (m["name"], m["short_name"], m["start_url"], m["display"]) == (

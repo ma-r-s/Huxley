@@ -248,6 +248,7 @@ const ptr = document.getElementById("ptr");
 const REASON = {tool_error: "something failed", not_heard: "not heard", no_answer: "no answer", corrected: "he corrected it", asked_again: "asked again"};
 const KIND = {music: "Artist", book: "Book", radio: "Station"};
 const CHAT_POLL_MS = 5000;
+const VERSION = "__APP_VERSION__";  // the server writes its hash here (web.py)
 let app = null, appFailed = false, status = null;
 let chat = null, chatFor = null, chatFailed = false, chatToken = 0;
 let newBelow = false, allStruggles = false;
@@ -749,14 +750,28 @@ function live() {
   if (r.tab === "chat" && (!r.date || r.date === today || (chat && chat.is_today && chat.date === r.date))) loadChat(false);
 }
 
+/* A home-screen app resumes the page it had: reload when the server has a
+   newer one (asked when the app comes back, and every few minutes). */
+async function checkVersion() {
+  try {
+    const res = await fetch("version.json", {cache: "no-store"});
+    if (!res.ok) return;
+    const v = await res.json();
+    if (v.version && v.version !== VERSION && !(playing)) location.reload();
+  } catch (e) { /* offline: the next check */ }
+}
+
 window.addEventListener("hashchange", () => render(true));
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
+  checkVersion();
   loadApp();
   live();
   if (route().tab === "walkie") loadStatus();
 });
 setInterval(live, CHAT_POLL_MS);
+setInterval(() => { if (document.visibilityState === "visible") checkVersion(); }, 300000);
+window.addEventListener("pageshow", e => { if (e.persisted) checkVersion(); });
 setInterval(() => { if (document.visibilityState === "visible") loadApp(); }, 30000);
 setInterval(() => { if (document.visibilityState === "visible" && route().tab === "walkie") loadStatus(); }, 30000);
 setInterval(() => { for (const el of document.querySelectorAll("[data-ago]")) el.textContent = ago(el.dataset.ago); }, 30000);

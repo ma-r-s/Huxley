@@ -212,6 +212,11 @@ follows the phone.
 **Add it to the iPhone**: on the tailnet, open
 `http://<the box's Tailscale address>:8780/app/` in Safari, Share, Add to
 Home Screen. It opens full screen as "Walkie", light or dark with the phone.
+iOS resumes a home-screen app on the page it had, so the page carries its
+own version (the HTML's hash, written in by web.py) and asks
+`/app/version.json` when it comes back to the screen and every 5 minutes:
+a newer one reloads it (not while a recording plays). An app opened before
+this existed needs one swipe-away and reopen.
 
 The header, on every tab: "Abuelo", online or offline since, what's
 playing, and the battery (from `/app.json`, every 30 s). Four tabs:
