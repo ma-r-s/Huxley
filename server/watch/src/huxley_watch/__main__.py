@@ -11,16 +11,19 @@ import argparse
 import signal
 import sys
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from huxley_watch.config import ConfigError, find_config, load_config
-from huxley_watch.cycle import Watcher
+from huxley_watch.cycle import Watcher, health_url
+from huxley_watch.facts import server_client_connected
 from huxley_watch.web import make_server, serve_in_background
 from huxley_watch.wlog import WatchLog
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import FrameType
 
 
@@ -129,10 +132,40 @@ def main(argv: list[str] | None = None) -> int:
                 error=type(exc).__name__,
                 at=f"{Path(frame.filename).name}:{frame.lineno}",
             )
-        stop.wait(watcher.cfg.interval_s)
+        wait_next(stop, watcher)
     server.shutdown()
     log.info("watch.stopped")
     return 0
+
+
+# While the walkie is marked offline, how often to ask the server whether it
+# came back.
+QUICK_S = 15.0
+
+
+def wait_next(
+    stop: threading.Event,
+    watcher: Watcher,
+    connected: Callable[[str], bool | None] = server_client_connected,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """The interval to the next cycle, cut short when the walkie comes back
+    while it's marked offline: it connected for four minutes between two
+    cycles and the page never showed it (2026-10-17)."""
+    end = clock() + watcher.cfg.interval_s
+    while not stop.is_set():
+        left = end - clock()
+        if left <= 0:
+            return
+        if "walkie.offline" not in watcher.state.open:
+            stop.wait(left)
+            return
+        if stop.wait(min(QUICK_S, left)):
+            return
+        if connected(health_url(watcher.cfg)) is True:
+            waited = watcher.cfg.interval_s - (end - clock())
+            watcher.log.info("watch.walkie_back_early", waited_s=round(waited))
+            return
 
 
 if __name__ == "__main__":

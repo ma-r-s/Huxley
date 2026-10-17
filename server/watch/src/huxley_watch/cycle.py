@@ -430,12 +430,15 @@ def _budget_fields(inputs: Inputs) -> dict[str, Any]:
     }
 
 
+def health_url(cfg: Config) -> str:
+    return cfg.health_url or f"http://127.0.0.1:{cfg.server_port}/health"
+
+
 def _health_ok(cfg: Config) -> bool | None:
     """The server's own verdict from `/health` (same box: loopback is
     allowed). Only ever shown, never turned into "down": a server from
     before /health answers 426 and reads as None."""
-    url = cfg.health_url or f"http://127.0.0.1:{cfg.server_port}/health"
-    return server_health_ok(url)
+    return server_health_ok(health_url(cfg))
 
 
 def _alive(cfg: Config) -> bool | None:

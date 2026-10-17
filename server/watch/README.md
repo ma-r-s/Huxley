@@ -438,6 +438,12 @@ and its memory kept.
 If `healthchecks_url` is set, every cycle pings it: healthchecks.io tells
 you when the pings stop, which is how you learn the box itself died.
 
+Cycles are `interval` minutes apart, but while the walkie is marked
+offline the wait asks the server's `/health` every 15 s whether a client
+is connected, and the next cycle runs as soon as one is
+(`watch.walkie_back_early`): a four-minute visit fell between two cycles
+and the page never showed it (2026-10-17).
+
 ## Its log
 
 JSON lines in `<state_dir>/huxley-watch.log`, the server's shape:

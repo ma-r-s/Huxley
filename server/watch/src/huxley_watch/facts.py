@@ -400,6 +400,23 @@ def server_health_ok(url: str) -> bool | None:
     return ok if isinstance(ok, bool) else None
 
 
+def server_client_connected(url: str) -> bool | None:
+    """Whether the server has a client connected right now (`/health`
+    "client.connected"). None when it doesn't answer or doesn't say."""
+    import json
+
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            if not 200 <= int(resp.status) < 300:
+                return None
+            body = json.loads(resp.read(65536))
+    except Exception:
+        return None
+    client = body.get("client") if isinstance(body, dict) else None
+    connected = client.get("connected") if isinstance(client, dict) else None
+    return connected if isinstance(connected, bool) else None
+
+
 def book_cycle(
     now: datetime, tz: ZoneInfo, renews_day: int, since: date | None = None
 ) -> tuple[datetime, datetime]:
