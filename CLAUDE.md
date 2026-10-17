@@ -108,6 +108,7 @@ uv run --package huxley-skill-stocks pytest server/skills/stocks/tests          
 uv run --package huxley-skill-spotify pytest server/skills/spotify/tests         # spotify skill
 uv run --package huxley-watch pytest server/watch/tests                          # huxley-watch
 uv run --package huxley-watch huxley-watch [--once] [--config FILE]              # the caregiver's page (127.0.0.1:8780) + alerts; server/watch/README.md
+uv run python scripts/privacy_scan.py                                            # BEFORE ANY PUSH: real numbers/ids in the commits to push (the repo is public)
 cd server/runtime && uv run huxley                                               # run the server (loads .env from server/runtime/)
 # Run Basic in parallel for persona A/B testing:
 cd server/runtime && HUXLEY_PERSONA=basic HUXLEY_SERVER_PORT=8766 uv run huxley
