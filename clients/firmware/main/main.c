@@ -191,6 +191,10 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    /* F-0023: count crash resets before anything else can crash, and go
+     * back to the previous image after three early ones in a row. */
+    hux_ota_crash_check();
+
     /* Shared on-board peripherals (I2C bus + TCA9555). Must run before
      * any consumer of either — buttons read it, audio enables the
      * speaker PA through it, audio registers ES7210/ES8311 on the

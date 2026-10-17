@@ -21,6 +21,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -46,6 +47,19 @@ bool hux_ota_rollback(void);
 /** At boot: log the running slot, its state, and the image a rollback
  * came from. */
 void hux_ota_boot_check(void);
+
+/** First thing after NVS at boot (F-0023): counts crash resets under
+ * 10 min after boot on this image (RTC memory) and, at the third in a row
+ * on an accepted image, goes back to the other slot if it holds a valid
+ * image (`ota.auto_rollback`); records why the bootloader took a pending
+ * image back (`ota.rollback_record`). Early, so an image that crashes
+ * during boot is counted too. */
+void hux_ota_crash_check(void);
+
+/** The hello's `rollback` (F-0028): the version the walkie went back from
+ * and why (crash|selftest|manual|no_server), until an image is accepted.
+ * False when there is none. */
+bool hux_ota_rollback_info(char *from, size_t from_cap, char *reason, size_t reason_cap);
 
 /** firmware.status (F-0028): `phase` is downloading, verifying, rebooting,
  * selftest, accepted or failed; `error` names what failed, else NULL. */

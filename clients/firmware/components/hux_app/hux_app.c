@@ -429,7 +429,14 @@ static void send_device_hello(void) {
     if (hux_battery_last(&mv, &pct)) {
         cJSON_AddItemToArray(caps, cJSON_CreateString("battery.v1"));
     }
-    cJSON_AddNullToObject(d, "rollback"); /* F-0028's rollback bookkeeping fills it */
+    char rb_from[32], rb_reason[12];
+    if (hux_ota_rollback_info(rb_from, sizeof(rb_from), rb_reason, sizeof(rb_reason))) {
+        cJSON *rb = cJSON_AddObjectToObject(d, "rollback"); /* F-0023, F-0028 */
+        cJSON_AddStringToObject(rb, "from_version", rb_from);
+        cJSON_AddStringToObject(rb, "reason", rb_reason);
+    } else {
+        cJSON_AddNullToObject(d, "rollback");
+    }
     esp_core_dump_summary_t *dump = calloc(1, sizeof(*dump));
     if (dump != NULL && esp_core_dump_image_check() == ESP_OK &&
         esp_core_dump_get_summary(dump) == ESP_OK) {

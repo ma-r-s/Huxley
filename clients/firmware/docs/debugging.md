@@ -338,6 +338,27 @@ failed`). Without the accept, the next restart goes back to the previous
 image. The developer door's push (`dev.py flash`, `ota confirm`) still
 works on the LAN.
 
+An accepted image that crash-loops goes back by itself (F-0023): at boot,
+before anything else can crash, `hux_ota_crash_check` counts resets by a
+panic or the interrupt or task watchdog under 10 min after boot on the
+same image (RTC memory; not esptool's reset at the end of a flash; a
+brownout neither counts nor breaks the run, any other reset breaks it):
+`ota.crash_count early_in_a_row= last_uptime_s=`, and at the third, if
+the other slot holds a valid image, `ota.auto_rollback from= to=`: the
+image is marked invalid and the bootloader boots the other slot's valid
+entry (a boot-partition switch would boot it pending, unaccepted, and its
+first reset would bring the crashing one back); `ota.auto_rollback_refused`
+when there is none. The console's `ota rollback` does the same. Every
+rollback is recorded in NVS until an image is accepted
+(`ota.rollback_record from= reason=`): the auto rollback as `crash`, the
+console's `ota rollback` as `manual`, and the bootloader taking a pending
+image back as `selftest` (its self-test failed: it says so in NVS first),
+`crash` (it crashed) or `no_server` (restarted without the accept). The
+hello carries it as `rollback {from_version, reason}`, so the server
+doesn't re-offer that image automatically (protocol.md). Only an image
+from F-0023 on reports it: one rolled back onto an older image reports
+`rollback: null` and is offered again.
+
 ### Moving the server (F-0027)
 
 The address in `secrets.h` is compiled into every image; a saved one in

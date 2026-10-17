@@ -19,6 +19,8 @@
 #include "hux_audio.h"
 #include "hux_link.h"
 #include "hux_net.h"
+#include "hux_ota_policy.h"
+#include "nvs.h"
 
 static const char *TAG = "hux_ota";
 
@@ -253,6 +255,8 @@ const char *hux_ota_last_invalid(void) {
     return s_last_invalid;
 }
 
+static void rb_clear(void); /* the rollback bookkeeping, below */
+
 bool hux_ota_confirm(void) {
     if (strcmp(hux_ota_running_state(), "pending") != 0) {
         ESP_LOGW(TAG, "ota.confirm_refused state=%s (nothing pending)", hux_ota_running_state());
@@ -266,30 +270,208 @@ bool hux_ota_confirm(void) {
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     ESP_LOGW(TAG, "ota.confirmed slot=%s uptime_s=%d err=%s", hux_ota_running_slot(), (int)up_s,
              esp_err_to_name(err));
+    if (err == ESP_OK) {
+        rb_clear();
+    }
     return err == ESP_OK;
 }
 
+/* --- Rollback bookkeeping (F-0023, F-0028): the hello's `rollback`
+ * {from_version, reason}, kept in NVS until an image is accepted, so the
+ * server never re-offers an image the walkie went back from by itself. */
+#define OTA_NVS_NS     "hux_ota"
+#define OTA_NVS_RB     "rb"
+#define OTA_NVS_STFAIL "stfail"
+
+typedef struct {
+    char from[32];
+    char reason[12];
+} ota_rb_t;
+
+static ota_rb_t s_rb; /* loaded at the crash check, written with it */
+static bool s_rb_set = false;
+
+static void rb_write(const char *from, const char *reason) {
+    memset(&s_rb, 0, sizeof(s_rb));
+    snprintf(s_rb.from, sizeof(s_rb.from), "%s", from);
+    snprintf(s_rb.reason, sizeof(s_rb.reason), "%s", reason);
+    s_rb_set = true;
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(OTA_NVS_NS, NVS_READWRITE, &h);
+    if (err == ESP_OK) {
+        err = nvs_set_blob(h, OTA_NVS_RB, &s_rb, sizeof(s_rb));
+        if (err == ESP_OK) {
+            err = nvs_commit(h);
+        }
+        nvs_close(h);
+    }
+    ESP_LOGW(TAG, "ota.rollback_record from=%s reason=%s nvs=%s", s_rb.from, s_rb.reason,
+             esp_err_to_name(err));
+}
+
+/* Put back the record from before a rollback that didn't happen. */
+static void rb_restore(const ota_rb_t *prev, bool had) {
+    if (had) {
+        rb_write(prev->from, prev->reason);
+        return;
+    }
+    s_rb_set = false;
+    memset(&s_rb, 0, sizeof(s_rb));
+    nvs_handle_t h;
+    if (nvs_open(OTA_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, OTA_NVS_RB);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void rb_clear(void) {
+    s_rb_set = false;
+    memset(&s_rb, 0, sizeof(s_rb));
+    nvs_handle_t h;
+    if (nvs_open(OTA_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, OTA_NVS_RB);
+        nvs_erase_key(h, OTA_NVS_STFAIL);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+bool hux_ota_rollback_info(char *from, size_t from_cap, char *reason, size_t reason_cap) {
+    if (!s_rb_set) {
+        return false;
+    }
+    snprintf(from, from_cap, "%s", s_rb.from);
+    snprintf(reason, reason_cap, "%s", s_rb.reason);
+    return true;
+}
+
+static hux_reset_class_t reset_class(void) {
+    switch (esp_reset_reason()) {
+        case ESP_RST_POWERON:  return HUX_RESET_COLD;
+        case ESP_RST_PANIC:
+        case ESP_RST_INT_WDT:
+        case ESP_RST_TASK_WDT: return HUX_RESET_CRASH;
+        /* ESP_RST_WDT is esptool's reset at the end of every flash.sh
+         * (main.c): never a crash, or three re-flashes would switch slots. */
+        case ESP_RST_BROWNOUT: return HUX_RESET_BROWNOUT;
+        default:               return HUX_RESET_OTHER;
+    }
+}
+
+/* The other slot, if it holds an image that ran and was kept. */
+static const esp_partition_t *other_valid(esp_app_desc_t *desc) {
+    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
+    esp_ota_img_states_t st;
+    bool usable = other != NULL && esp_ota_get_partition_description(other, desc) == ESP_OK &&
+                  (esp_ota_get_state_partition(other, &st) != ESP_OK || st == ESP_OTA_IMG_VALID);
+    return usable ? other : NULL;
+}
+
+/* Kept in RTC memory across resets; the uptime written every 5 s, so the
+ * next boot knows how long this one lasted. */
+RTC_NOINIT_ATTR static hux_crash_rtc_t s_crash;
+static esp_timer_handle_t s_uptime_timer;
+
+static void uptime_tick(void *arg) {
+    (void)arg;
+    s_crash.uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+}
+
+void hux_ota_crash_check(void) {
+    const esp_app_desc_t *app = esp_app_get_description();
+    uint32_t image;
+    memcpy(&image, app->app_elf_sha256, sizeof(image));
+    hux_reset_class_t cls = reset_class();
+    uint32_t last_up = s_crash.magic == HUX_CRASH_MAGIC ? s_crash.uptime_s : 0;
+    uint32_t early = hux_crash_boot(&s_crash, image, cls);
+    const esp_timer_create_args_t args = {.callback = uptime_tick, .name = "ota_uptime"};
+    if (esp_timer_create(&args, &s_uptime_timer) == ESP_OK) {
+        esp_timer_start_periodic(s_uptime_timer, 5 * 1000000);
+    }
+    nvs_handle_t h;
+    char stfail[32] = {0};
+    if (nvs_open(OTA_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(s_rb);
+        s_rb_set = nvs_get_blob(h, OTA_NVS_RB, &s_rb, &len) == ESP_OK && len == sizeof(s_rb) &&
+                   memchr(s_rb.from, 0, sizeof(s_rb.from)) != NULL &&
+                   memchr(s_rb.reason, 0, sizeof(s_rb.reason)) != NULL;
+        len = sizeof(stfail);
+        if (nvs_get_str(h, OTA_NVS_STFAIL, stfail, &len) != ESP_OK) {
+            stfail[0] = '\0';
+        }
+        nvs_close(h);
+    }
+    /* The bootloader took a pending image back: say why, once per image. */
+    const esp_partition_t *bad = esp_ota_get_last_invalid_partition();
+    esp_app_desc_t bad_desc;
+    if (bad != NULL && esp_ota_get_partition_description(bad, &bad_desc) == ESP_OK &&
+        (!s_rb_set || strcmp(s_rb.from, bad_desc.version) != 0) &&
+        strcmp(bad_desc.version, app->version) != 0) {
+        rb_write(bad_desc.version, hux_rollback_reason(strcmp(stfail, bad_desc.version) == 0, cls));
+    }
+    if (early == 0) {
+        return;
+    }
+    ESP_LOGW(TAG, "ota.crash_count early_in_a_row=%u last_uptime_s=%u version=%s",
+             (unsigned)early, (unsigned)last_up, app->version);
+    const char *state = hux_ota_running_state();
+    if (early < HUX_CRASH_ROLLBACK_AFTER || strcmp(state, "pending") == 0) {
+        return; /* a pending image: the bootloader already goes back on its own */
+    }
+    esp_app_desc_t desc;
+    const esp_partition_t *other = other_valid(&desc);
+    if (other == NULL) {
+        ESP_LOGE(TAG, "ota.auto_rollback_refused early_in_a_row=%u: the other slot has no valid "
+                      "image", (unsigned)early);
+        return;
+    }
+    /* F-0023: crashing again and again under 10 min after boot: go back.
+     * Marked invalid, not a boot-partition switch: with app rollback on, a
+     * switch rewrites the target as NEW, so the good image would boot
+     * pending, never be accepted (the manifest names this one) and come
+     * back here at its first reset. Invalid, the bootloader boots the
+     * other slot's existing valid entry, and never this one again. */
+    ota_rb_t prev = s_rb;
+    bool had = s_rb_set;
+    rb_write(app->version, "crash");
+    s_crash.early = 0;
+    esp_err_t err = esp_ota_mark_app_invalid_rollback();
+    ESP_LOGE(TAG, "ota.auto_rollback early_in_a_row=%u from=%s to=%s slot=%s err=%s",
+             (unsigned)early, app->version, desc.version, other->label, esp_err_to_name(err));
+    if (err == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(300));
+        esp_restart();
+    }
+    rb_restore(&prev, had); /* still running this image: no false record */
+}
+
 bool hux_ota_rollback(void) {
+    const char *running = esp_app_get_description()->version;
     if (strcmp(hux_ota_running_state(), "pending") == 0) {
+        rb_write(running, "manual");
         ESP_LOGW(TAG, "ota.rollback from pending slot=%s", hux_ota_running_slot());
         vTaskDelay(pdMS_TO_TICKS(300)); /* let the line out */
         esp_ota_mark_app_invalid_rollback_and_reboot(); /* returns only on failure */
         ESP_LOGE(TAG, "ota.rollback_failed (no valid image in the other slot)");
         return false;
     }
-    const esp_partition_t *other = esp_ota_get_next_update_partition(NULL);
     esp_app_desc_t desc;
-    esp_ota_img_states_t st;
-    bool usable = other != NULL && esp_ota_get_partition_description(other, &desc) == ESP_OK &&
-                  (esp_ota_get_state_partition(other, &st) != ESP_OK || st == ESP_OTA_IMG_VALID);
-    if (!usable) {
+    const esp_partition_t *other = other_valid(&desc);
+    if (other == NULL) {
         ESP_LOGE(TAG, "ota.rollback_refused (the other slot has no valid image)");
         return false;
     }
-    esp_err_t err = esp_ota_set_boot_partition(other);
+    ota_rb_t prev = s_rb;
+    bool had = s_rb_set;
+    rb_write(running, "manual");
+    /* Invalid, not a switch (F-0023's review): a switch would boot the
+     * other image pending, and its first reset would bring this one back. */
+    esp_err_t err = esp_ota_mark_app_invalid_rollback();
     ESP_LOGW(TAG, "ota.rollback to slot=%s version=%s err=%s", other->label, desc.version,
              esp_err_to_name(err));
     if (err != ESP_OK) {
+        rb_restore(&prev, had);
         return false;
     }
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -379,6 +561,16 @@ static void verify_task(void *unused) {
     s_verify.selftest_ok = s_selftest == NULL || s_selftest(&why);
     s_verify.selftest_why = s_verify.selftest_ok ? NULL : (why != NULL ? why : "unknown");
     s_verify.selftest_done = true;
+    if (!s_verify.selftest_ok) {
+        /* The previous image, after the bootloader takes this one back,
+         * reports `rollback.reason: selftest` (F-0028's bookkeeping). */
+        nvs_handle_t h;
+        if (nvs_open(OTA_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+            nvs_set_str(h, OTA_NVS_STFAIL, esp_app_get_description()->version);
+            nvs_commit(h);
+            nvs_close(h);
+        }
+    }
     char elf[10] = {0};
     esp_app_get_elf_sha256(elf, sizeof(elf));
     /* One round per hello (the first hello gave the semaphore already),
@@ -459,6 +651,9 @@ void hux_ota_accept(const char *version) {
     esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
     ESP_LOGW(TAG, "ota.accepted slot=%s version=%s err=%s", hux_ota_running_slot(), running,
              esp_err_to_name(err));
+    if (err == ESP_OK) {
+        rb_clear(); /* a kept image: the rollback it followed is history */
+    }
     if (s_verify_hello != NULL) {
         xSemaphoreGive(s_verify_hello); /* the verify task sees "valid" and ends */
     }

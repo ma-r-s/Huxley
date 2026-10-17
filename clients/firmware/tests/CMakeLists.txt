@@ -192,6 +192,15 @@ target_include_directories(test_hux_led_anim PRIVATE ${CMAKE_SOURCE_DIR}/helpers
 target_link_libraries(test_hux_led_anim PRIVATE hux_led_anim)
 add_test(NAME hux_led_anim COMMAND test_hux_led_anim)
 
+# -- hux_ota_policy (library under test): crash-loop rollback (F-0023), in hux_ota.
+set(HUX_OTA_DIR ${CMAKE_SOURCE_DIR}/../components/hux_ota)
+add_library(hux_ota_policy STATIC ${HUX_OTA_DIR}/hux_ota_policy.c)
+target_include_directories(hux_ota_policy PUBLIC ${HUX_OTA_DIR}/include)
+add_executable(test_hux_ota_policy test_hux_ota_policy.c)
+target_include_directories(test_hux_ota_policy PRIVATE ${CMAKE_SOURCE_DIR}/helpers)
+target_link_libraries(test_hux_ota_policy PRIVATE hux_ota_policy)
+add_test(NAME hux_ota_policy COMMAND test_hux_ota_policy)
+
 # Convenience target: `cmake --build build --target check` runs every test.
 add_custom_target(check
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
@@ -199,5 +208,5 @@ add_custom_target(check
             test_hux_wifi_retry test_hux_link test_hux_blackbox test_hux_super_check
             test_hux_battery_level test_hux_prompt_parse test_hux_battery_cutoff
             test_hux_wifi_list test_hux_echo test_hux_alert_logic test_hux_status
-            test_hux_led_anim
+            test_hux_led_anim test_hux_ota_policy
 )

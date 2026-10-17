@@ -1003,7 +1003,7 @@ goes out, with the press's totals.
   (bench clips over Wi-Fi, POST /clips) with the requests that failed in
   real use as clips 7-15.
 
-### F-0023: Go back by itself after repeated crashes past the confirm · queued (required by F-0028, ignoring BROWNOUT)
+### F-0023: Go back by itself after repeated crashes past the confirm · in_progress 2026-10-17 (built and host-tested; not yet on the walkie)
 
 **Problem** (from the F-0021 review): an image that passes its 30 s and
 is confirmed, then crashes on every talk press, crash-loops for good;
@@ -1012,6 +1012,10 @@ is confirmed, then crashes on every talk press, crash-loops for good;
 counter is already there); after 3 in a row, `esp_ota_set_boot_partition`
 to the other slot if it's valid, and say so (`ota.auto_rollback`).
 **Effort**: half a day with a crash-on-press test image.
+**Also found** (2026-10-17): the hello's `rollback` was always null (F-0028's bookkeeping never built), so the server's rollback guard never engaged: a pending image whose self-test failed and that rolled back would be offered again at every hello.
+**Built** (2026-10-17): `hux_ota_policy` (pure, host-tested: `hux_crash_boot`, `hux_rollback_reason`); `hux_ota_crash_check` first thing after NVS in app_main (an image that crashes during boot is counted too): crash resets (panic, int/task/other watchdog) under 10 min after boot, same image (the first ELF sha bytes), 3 in a row on an image that isn't pending -> `esp_ota_set_boot_partition` to the other slot if valid. A 5-s esp_timer keeps the uptime in RTC. The rollback record in NVS (`hux_ota/rb`: crash, manual, selftest via `hux_ota/stfail`, no_server), cleared on `ota.accepted`; the hello reports it. The supervisor's own early stalls are task-watchdog resets and count too: at 3 the image goes back rather than only degrading (a hardware fault then leaves it on the older image with a `crash` record, visible, until Mario re-offers). Limit: only F-0023+ images report the record, so the first one rolling back onto dc69f199 reports null and is re-offered. Not yet: the crash-on-press test image (no spare board). Docs: debugging.md, remote-operation.md.
+**Code review** (a fresh reviewer, read against ESP-IDF 5.5's source): BLOCKER, taken: `esp_ota_set_boot_partition` with app rollback on rewrites the target as NEW, so the good image booted pending, was never accepted (the manifest names the other) and its first reset brought the crash-looping one back, which would then record `{from: good}` and loop for good. Now `esp_ota_mark_app_invalid_rollback()` (the crashing image invalid; the bootloader boots the other slot's existing valid entry; never this one again, so a hardware fault can't bounce between them). The console's `ota rollback` had the same flaw (valid-image path): fixed the same way. Also taken: `ESP_RST_WDT` (esptool's reset after every flash) isn't a crash; a crash of another image (a pending one taken back) doesn't count for the one now running; the record is restored if the rollback doesn't happen; `ota confirm` clears it too. Operator note for the first F-0023 image only: if it ever rolls back onto dc69f199, that image reports `rollback: null`, so withdraw the offer by hand or it is re-offered.
+**Night test plan** (zero-risk): one `hang app` (a supervisor stall: one silent task-watchdog restart) -> `ota.crash_count early_in_a_row=1 last_uptime_s=` about the uptime at the hang; then `reboot` -> no count (a software restart breaks the run); the hello's `rollback` stays null. The full loop (3 hangs -> back to the other slot) is not run on his walkie without Mario's OK.
 
 ### F-0024: Opus audio over the WebSocket (the walkie's link drops packets) · in_progress 2026-10-12
 
