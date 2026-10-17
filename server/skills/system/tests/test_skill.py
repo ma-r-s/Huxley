@@ -181,3 +181,41 @@ class TestBattery:
         monkeypatch.setattr(mod.time, "monotonic", lambda: real() + 20 * 60)
         data = json.loads((await s.handle("get_battery", {})).output)
         assert data["percent"] == 50 and data["minutes_since_reading"] == 20
+
+
+class TestVolumeSteps:
+    """ "Más volumen" twice set 80 twice (2026-10-17): the step is the
+    skill's, from the last level set, kept across a restart."""
+
+    async def test_up_without_a_known_level_is_80_then_15_more(self) -> None:
+        s = SystemSkill()
+        await s.setup(make_test_context(config={}))
+        first = json.loads((await s.handle("set_volume", {"change": "up"})).output)
+        second = json.loads((await s.handle("set_volume", {"change": "up"})).output)
+        assert (first["volume"], second["volume"], second["was"]) == (80, 95, 80)
+        third = json.loads((await s.handle("set_volume", {"change": "up"})).output)
+        assert third["volume"] == 100
+
+    async def test_down_steps_and_stops_at_20(self) -> None:
+        s = SystemSkill()
+        await s.setup(make_test_context(config={}))
+        await s.handle("set_volume", {"level": 30})
+        down = await s.handle("set_volume", {"change": "down"})
+        assert json.loads(down.output)["volume"] == 20
+        assert isinstance(down.side_effect, SetVolume) and down.side_effect.level == 20
+
+    async def test_a_level_said_wins_over_a_change(self) -> None:
+        s = SystemSkill()
+        await s.setup(make_test_context(config={}))
+        out = json.loads((await s.handle("set_volume", {"level": 60, "change": "up"})).output)
+        assert out["volume"] == 60
+
+    async def test_the_last_level_survives_a_restart(self) -> None:
+        ctx = make_test_context(config={})
+        s = SystemSkill()
+        await s.setup(ctx)
+        await s.handle("set_volume", {"level": 50})
+        again = SystemSkill()
+        await again.setup(ctx)
+        out = json.loads((await again.handle("set_volume", {"change": "up"})).output)
+        assert (out["was"], out["volume"]) == (50, 65)

@@ -1146,6 +1146,25 @@ class SpotifySkill:
                 # Search would answer with a guide or an obscure book.
                 await log.ainfo("spotify.book_redirected", query=title)
                 return await self._browse_query(shelf, title, more=False)
+            elif shelf is not None and (near := shelves.near_title(shelf, title)) is not None:
+                # Close to a shelf book but not sure ("El olvido en que
+                # vivimos"): ask, and "sí" plays it from the list.
+                self._last_list = [
+                    Match(
+                        uri=near.uri,
+                        kind="audiobook",
+                        title=near.title,
+                        artist=near.author,
+                        about=near.pitch,
+                    )
+                ]
+                await log.ainfo(
+                    "spotify.book_confirm_asked",
+                    query=title,
+                    title=near.title,
+                    source="shelf_near",
+                )
+                return self._then("ask_which", title=_short_title(near.title), author=near.author)
             else:
                 source = "search"
                 if self._search is None:
@@ -1505,6 +1524,12 @@ class SpotifySkill:
             return await self._offer(
                 shelf, mode="author", query=query, topic=author, books=books, more=more
             )
+        near = shelves.near_title(shelf, query) if not more else None
+        if near is not None:
+            # Close to a shelf book: offer it by name ("El olvido en que
+            # vivimos" said "no tengo libros de eso", 2026-10-17).
+            await self._log().ainfo("spotify.shelf_near", query=query, title=near.title)
+            return await self._offer(shelf, mode="title", query=query, topic="", books=[near])
         return await self._offer_named(shelf, query, more=more)
 
     async def _browse_like(self, shelf: Shelf, like: str, *, more: bool) -> ToolResult:
@@ -1744,8 +1769,11 @@ class SpotifySkill:
         ]
         named = titled or by_author
         if not named:
+            # A book or author named that Spotify hasn't got: say so, not
+            # "en la repisa no tengo libros de eso" (he asked for "Mi alma
+            # se la dejo al diablo" four times on 2026-10-17).
             await log.ainfo("spotify.shelf_nothing", reason="no_match", query=query)
-            return await self._nothing(shelf)
+            return await self._nothing(shelf, key="not_found")
         # Every edition of a title named gets its chance; one is offered.
         offered, hours_out = await self._playable_only(named, 1 if titled else OFFER_COUNT)
         if hours_out:
@@ -1777,14 +1805,15 @@ class SpotifySkill:
             already=[],
         )
 
-    async def _nothing(self, shelf: Shelf, *, topic: str = "") -> ToolResult:
+    async def _nothing(self, shelf: Shelf, *, topic: str = "", key: str = "nothing") -> ToolResult:
         """Nothing fits: offer recommendations instead (no list of kinds:
-        Mario, 2026-10-14, choosing a kind was too much for him)."""
+        Mario, 2026-10-14, choosing a kind was too much for him). `key`:
+        "not_found" for a book or author named that Spotify hasn't got."""
         lang = self._lang()
         if topic:
             line = lines.shelf_line(lang, "no_more", topic=topic)
         else:
-            line = lines.shelf_line(lang, "nothing")
+            line = lines.shelf_line(lang, key)
         self._browse = None
         return ToolResult(
             output=json.dumps(

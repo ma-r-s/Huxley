@@ -30,6 +30,12 @@ if TYPE_CHECKING:
 SHELF_VERSION = 1
 # What was said matches a shelf title (letters, SequenceMatcher).
 TITLE_MATCH = 0.8
+# Close but not sure: asked about ("¿Es El olvido que seremos?"), never
+# played on its own. On his 51 book requests through 2026-10-17 every
+# score from here to TITLE_MATCH was the book he meant or a fair guess
+# ("El olvido en que vivimos" 0.71, "ponga un coro, ven, tiene que le
+# escriba" 0.78); every one below was wrong.
+NEAR_MATCH = 0.65
 # ... a category or a tag.
 TERM_MATCH = 0.85
 # Words around a request that name neither a theme nor a book.
@@ -529,6 +535,22 @@ def match_title(shelf: Shelf, said: str) -> ShelfBook | None:
         if best is None or found > best[0]:
             best = (found, book)
     return best[1] if best is not None and best[0] >= TITLE_MATCH else None
+
+
+def near_title(shelf: Shelf, said: str) -> ShelfBook | None:
+    """The shelf book closest to what was said when it's close but under
+    TITLE_MATCH: one to ask about, not to play."""
+    best: tuple[float, ShelfBook] | None = None
+    for book in shelf.books:
+        heard = heard_title(said, book.author)
+        if not heard:
+            continue
+        found = closeness(heard, _bare_title(book.title))
+        if best is None or found > best[0]:
+            best = (found, book)
+    if best is not None and NEAR_MATCH <= best[0] < TITLE_MATCH:
+        return best[1]
+    return None
 
 
 def theme_words(shelf: Shelf) -> frozenset[str]:

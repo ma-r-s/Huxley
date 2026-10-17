@@ -34,8 +34,13 @@ from huxley_sdk import (
 
 _TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
     "es": {
-        "set_volume": "Ajusta el volumen del dispositivo (0-100).",
-        "set_volume_level": "Nivel de volumen (0-100)",
+        "set_volume": (
+            "Ajusta el volumen del dispositivo. Con un número dicho, `level` "
+            "(0-100). Sin número ('súbele', 'más volumen', 'bájale'), `change` "
+            "'up' o 'down': el sistema sube o baja 15 desde el nivel actual."
+        ),
+        "set_volume_level": "Nivel de volumen (0-100), solo si dijo un número",
+        "set_volume_change": "'up' para subir, 'down' para bajar, sin número",
         "get_current_time": "Devuelve la hora y fecha actual.",
         "get_battery": (
             "Cuánta batería le queda al dispositivo, en porcentaje. Úsala cuando "
@@ -43,8 +48,13 @@ _TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
         ),
     },
     "en": {
-        "set_volume": "Adjust the device volume (0-100).",
-        "set_volume_level": "Volume level (0-100)",
+        "set_volume": (
+            "Adjust the device volume. With a number said, `level` (0-100). "
+            "Without one ('turn it up', 'louder', 'turn it down'), `change` 'up' "
+            "or 'down': the system moves it 15 from the current level."
+        ),
+        "set_volume_level": "Volume level (0-100), only when a number was said",
+        "set_volume_change": "'up' to raise, 'down' to lower, without a number",
         "get_current_time": "Return the current time and date.",
         "get_battery": (
             "How much battery the device has left, as a percentage. Use it when "
@@ -52,8 +62,13 @@ _TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
         ),
     },
     "fr": {
-        "set_volume": "Ajuste le volume de l'appareil (0-100).",
-        "set_volume_level": "Niveau de volume (0-100)",
+        "set_volume": (
+            "Ajuste le volume de l'appareil. Avec un nombre dit, `level` "
+            "(0-100). Sans nombre ('monte', 'plus fort', 'baisse'), `change` 'up' "
+            "ou 'down' : le système monte ou baisse de 15 depuis le niveau actuel."
+        ),
+        "set_volume_level": "Niveau de volume (0-100), seulement si un nombre a été dit",
+        "set_volume_change": "'up' pour monter, 'down' pour baisser, sans nombre",
         "get_current_time": "Renvoie l'heure et la date actuelles.",
         "get_battery": (
             "Combien de batterie il reste à l'appareil, en pourcentage. À utiliser "
@@ -69,6 +84,12 @@ _TOOL_DESCRIPTIONS: dict[str, dict[str, str]] = {
 # percentage and every 5 min. Crossing these speaks once each, on the way
 # down; charging back above BATTERY_REARM_PCT arms them again.
 BATTERY_WARN_PCTS = (20, 10)
+# "Súbele" without a number: 15 up or down from the last level, never below
+# 20 (he couldn't hear it); with no level known yet, 80 up or 40 down.
+VOLUME_STEP = 15
+VOLUME_FLOOR = 20
+VOLUME_UNKNOWN_UP = 80
+VOLUME_UNKNOWN_DOWN = 40
 BATTERY_REARM_PCT = 30
 # Older than this, the tool says how old (the device reports every 5 min).
 BATTERY_STALE_S = 15 * 60
@@ -225,6 +246,7 @@ class SystemSkill:
         self._battery: tuple[int, int, float] | None = None
         # The lowest warning spoken since the cell was last charged.
         self._battery_warned: int | None = None
+        self._volume: int | None = None  # the last level set (storage "volume")
         self._tasks: set[asyncio.Task[None]] = set()
 
     @property
@@ -249,9 +271,13 @@ class SystemSkill:
                             "minimum": 0,
                             "maximum": 100,
                             "description": d["set_volume_level"],
-                        }
+                        },
+                        "change": {
+                            "type": "string",
+                            "enum": ["up", "down"],
+                            "description": d["set_volume_change"],
+                        },
                     },
-                    "required": ["level"],
                 },
             ),
             ToolDefinition(
@@ -271,12 +297,7 @@ class SystemSkill:
             raise RuntimeError("SystemSkill: handle() called before setup()")
         match tool_name:
             case "set_volume":
-                level = max(0, min(100, args.get("level", 50)))
-                await self._logger.ainfo("system.volume_set", level=level)
-                return ToolResult(
-                    output=json.dumps({"volume": level, "ok": True}),
-                    side_effect=SetVolume(level=level),
-                )
+                return await self._set_volume(args)
             case "get_current_time":
                 now = datetime.now(tz=ZoneInfo(self._timezone))
                 await self._logger.ainfo(
@@ -298,6 +319,33 @@ class SystemSkill:
             case _:
                 await self._logger.awarning("system.unknown_tool", tool=tool_name)
                 return ToolResult(output=json.dumps({"error": f"Unknown tool: {tool_name}"}))
+
+    async def _set_volume(self, args: dict[str, Any]) -> ToolResult:
+        """A level said, or a step up or down from the last one set. The
+        model kept the level itself and got it wrong: "more volume" twice
+        set 80 twice ("sigo con el mismo nivel", 2026-10-17). The last level
+        is kept in storage, so a server restart doesn't lose it."""
+        assert self._logger is not None
+        was = self._volume
+        change = args.get("change")
+        if change in ("up", "down") and args.get("level") is None:
+            if was is None:
+                level = VOLUME_UNKNOWN_UP if change == "up" else VOLUME_UNKNOWN_DOWN
+            elif change == "up":
+                level = min(100, was + VOLUME_STEP)
+            else:
+                level = max(VOLUME_FLOOR, was - VOLUME_STEP)
+        else:
+            raw = args.get("level", 50)
+            level = max(0, min(100, raw if isinstance(raw, int) else 50))
+        self._volume = level
+        if self._ctx is not None:
+            await self._ctx.storage.set_setting("volume", str(level))
+        await self._logger.ainfo("system.volume_set", level=level, change=change, was=was)
+        return ToolResult(
+            output=json.dumps({"volume": level, "was": was, "ok": True}),
+            side_effect=SetVolume(level=level),
+        )
 
     async def _get_battery(self) -> ToolResult:
         assert self._logger is not None
@@ -355,6 +403,8 @@ class SystemSkill:
     async def setup(self, ctx: SkillContext) -> None:
         self._logger = ctx.logger
         self._ctx = ctx
+        stored = await ctx.storage.get_setting("volume")
+        self._volume = int(stored) if stored and stored.isdigit() else None
         ctx.subscribe_client_event("system.battery", self._on_battery)
         tz_value = ctx.config.get("timezone")
         if isinstance(tz_value, str) and tz_value:

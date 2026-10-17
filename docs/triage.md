@@ -6271,3 +6271,15 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 
 **Fix**: persona (es/en/fr): a noise, the lever's click or anything not understood never changes what's playing; pause or stop only on a clear "pausa / para / silencio / apaga / ya"; if unsure, "No te escuché bien, ¿me repites?" and leave everything as it is.
 
+## T1.56: His afternoon's friction (2026-10-17 13:13-15:00 Bogotá)
+
+**Status**: `done` (2026-10-17) · **Effort**: S
+
+Read from `/chat/today.json` (T1.54). Fixed:
+- "Quiero oír el olvido en que vivimos" (El olvido que seremos, on the shelf, started 10-14) and "Ponga un coro, ven, tiene que le escriba" (El coronel no tiene quien le escriba) scored 0.71 and 0.78 against the shelf's 0.8 match line and got "En la repisa no tengo libros de eso" / "¿A qué coro te refieres?". New shelf.NEAR_MATCH 0.65: `play_book` asks "¿Es ...?", `find_books` offers that book by name (on his 51 book requests every score in 0.65-0.8 was right or a fair guess, every one below wrong). Tests `test_a_title_close_to_a_shelf_book_is_offered_by_name`, `test_playing_a_title_close_to_a_shelf_book_asks_first`.
+- "Mi alma se la dejo al diablo" (Castro Caycedo, not on Spotify CO), asked four times, always heard "En la repisa no tengo libros de eso": a book or author not found anywhere now says "No lo encontré en Spotify. ¿Te recomiendo otros?".
+- "Búsqueme otro de Julio Verne" went to `search_the_web` (timed out): persona (es/en/fr) books are `find_books`/`play_book`, never the web.
+- "Cambie el disco" searched "Café en el disco": persona, "cambia el disco / otro disco" is another album by the same artist (`kind: album`).
+- "VAS VOLVENDO" (more volume) set 80 again ("sigo con el mismo nivel"): `set_volume` takes `change` up/down and the system skill steps 15 from the last level it set (stored, so a restart keeps it); persona uses it. Tests `TestVolumeSteps`.
+Not fixable here: he wants "Mi alma se la dejo al diablo", which Spotify CO doesn't have (only "Operación Pablo Escobar" by Castro Caycedo is); "Música de Deodat" (likely Leo Dan) played Gotye, a mishearing.
+

@@ -1456,8 +1456,41 @@ class TestTheShelf:
     ) -> None:
         skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
         result = await skill.handle("find_books", {"query": "dragones"})
-        assert _said(result) == "En la repisa no tengo libros de eso. ¿Te recomiendo otros?"
+        # Nothing on the shelf nor on Spotify: said plainly (2026-10-17).
+        assert _said(result) == "No lo encontré en Spotify. ¿Te recomiendo otros?"
         assert _events(skill, "spotify.shelf_nothing")[0]["reason"] == "no_match"
+
+    async def test_a_title_close_to_a_shelf_book_is_offered_by_name(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        # 2026-10-17: "Ponga un coro, ven, tiene que le escriba" (0.78) and
+        # "El olvido en que vivimos" (0.71) got "no tengo libros de eso".
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        result = await skill.handle(
+            "find_books", {"query": "ponga un coro, ven, tiene que le escriba"}
+        )
+        assert _said(result).startswith(
+            "El coronel no tiene quien le escriba, de Gabriel García Márquez"
+        )
+        assert (
+            _events(skill, "spotify.shelf_near")[0]["title"]
+            == "El coronel no tiene quien le escriba"
+        )
+
+    async def test_playing_a_title_close_to_a_shelf_book_asks_first(
+        self, tmp_path: Path, pcm_server: PcmServer
+    ) -> None:
+        skill, _, _, _ = await _shelf_skill(tmp_path, pcm_server)
+        asked = await skill.handle(
+            "play_book", {"title": "ponga un coro, ven, tiene que le escriba"}
+        )
+        assert _out(asked)["reason"] == "ask_which"
+        assert (
+            "¿Es El coronel no tiene quien le escriba, de Gabriel García Márquez?"
+            in _out(asked)["then"]
+        )
+        assert skill._search.queries == []  # type: ignore[union-attr]
+        assert _events(skill, "spotify.book_confirm_asked")[-1]["source"] == "shelf_near"
 
     async def test_an_author_not_on_the_shelf_gets_only_their_own_books(
         self, tmp_path: Path, pcm_server: PcmServer
