@@ -143,6 +143,25 @@ void hux_lever_release(hux_lever_t *l, uint32_t now_ms);
 /** Each loop pass: STOP once a pending release is HUX_LEVER_MERGE_MS old. */
 hux_lever_action_t hux_lever_tick(hux_lever_t *l, uint32_t now_ms);
 
+/* -- An update offered while in use waits for idle (F-0038) ------------
+ * Refused offers used to wait for the next hello: hours, when he listens
+ * to a book. Held in RAM instead (a restart drops it; the next hello
+ * re-offers) until the walkie has been idle, connected and charged
+ * HUX_OTA_IDLE_MS without a break; then the app asks the server again. */
+
+#define HUX_OTA_IDLE_MS (2u * 60u * 1000u)
+
+typedef struct {
+    bool held;
+    uint32_t idle_since;
+} hux_ota_wait_t;
+
+/** Hold (or keep holding: the same offer re-sent at a hello doesn't
+ * restart the wait; a disconnect already did). */
+void hux_ota_wait_hold(hux_ota_wait_t *w, uint32_t now_ms);
+/** Each loop pass. True once (and the hold cleared) when it is time. */
+bool hux_ota_wait_due(hux_ota_wait_t *w, uint32_t now_ms, bool busy, bool connected);
+
 const char *hux_status_name(hux_status_sound_t sound);
 const char *hux_status_phase_name(hux_status_phase_t phase);
 

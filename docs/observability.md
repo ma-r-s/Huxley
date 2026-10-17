@@ -560,13 +560,14 @@ The server half of W4 ([protocol](./protocol.md#http-firmware-and-admin), `huxle
 | `firmware.offered` | An admin offer was written to `offer.json`. | `version`, `force`, `previous`, `bytes`, `elf_sha` |
 | `firmware.offer_refused` (warn) | An admin offer was refused (bad parameters, no `.bin`, a misnamed image, no or another `.elf`). | `reason`, `version` |
 | `firmware.offer_unreadable` (error) | `offer.json` is not valid; nothing is offered until it is rewritten. | `path`, `error` |
-| `firmware.update_sent` | `firmware.update` went to the walkie. | `version`, `force`, `running`, `trigger` (`offer`, `hello`), `conn_id` |
+| `firmware.update_sent` | `firmware.update` went to the walkie. | `version`, `force`, `running`, `trigger` (`offer`, `hello`, `accepted`, `idle`: the walkie's `ready` after a deferral, F-0038), `conn_id` |
+| `firmware.ready_ignored` | A `firmware.status phase=ready` from a connection that isn't the current device's. | `reason` (`not_the_device`), `conn_id` |
 | `firmware.update_skipped` | It did not, and why: `same_version`, `no_ota_cap`, `no_device_token` (`HUXLEY_DEVICE_TOKEN` unset: the download would get 503), `pending_verify`, `failed_too_often`, `rolled_back`, `image_unavailable` (error); `no_offer` at debug. | `reason`, `version`, `running`, `trigger` |
 | `firmware.update_deferred` | An offer with no walkie connected (`no_device_connected`; it goes at the next hello), or the walkie left mid-send (`device_gone`). | `version`, `reason` |
 | `firmware.update_failed` (warn) | The walkie reported `failed` for a version; at 3 it is no longer offered automatically (`update_skipped reason=failed_too_often`) until an admin offer. | `version`, `failures`, `max_failures` |
 | `firmware.update_withheld` (warn) | The walkie rolled back from the offered version: not offered again automatically. Offer it from the admin route to retry. | `version`, `rollback_reason` |
 | `firmware.rollback_retry` / `firmware.rollback_overridden` | A `no_server` rollback's one automatic retry / an admin offer sent a version the walkie rolled back from. | `version`, `rollback_reason` |
-| `firmware.status` | Every `firmware.status` from the walkie, any phase (`downloading`, `verifying`, `rebooting`, `failed`, `selftest`, `accepted`). Warning for `failed` and for a failed self-test. | `version`, `phase`, `error`, `conn_id`, `pending_boot` |
+| `firmware.status` | Every `firmware.status` from the walkie, any phase (`deferred` with `busy` or `battery_low`: it holds the offer while in use, not a failure; `ready`: idle since, the server decides again; `downloading`, `verifying`, `rebooting`, `failed`, `selftest`, `accepted`). Warning for `failed` and for a failed self-test. | `version`, `phase`, `error`, `conn_id`, `pending_boot` |
 | `firmware.status_ignored` (warn) | A `selftest` status for another version than the pending image's. | `version`, `pending` |
 | `firmware.pending_boot` | A hello from a `pending_verify` image starts a new record (first hello of that boot). | `version`, `elf_sha`, `boot_counter`, `device_id` |
 | `firmware.reconnect_forced` | Self-test passed and manifest served: the walkie's socket will be closed with 1012 after `delay_s`. | `version`, `conn_id`, `trigger` (`selftest`, `manifest`, `hello`), `delay_s`, `code` |

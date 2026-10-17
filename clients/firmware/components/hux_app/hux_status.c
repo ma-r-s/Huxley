@@ -199,3 +199,25 @@ hux_lever_action_t hux_lever_tick(hux_lever_t *l, uint32_t now_ms) {
     l->down = false;
     return HUX_LEVER_STOP;
 }
+
+void hux_ota_wait_hold(hux_ota_wait_t *w, uint32_t now_ms) {
+    if (!w->held) {
+        w->held = true;
+        w->idle_since = now_ms;
+    }
+}
+
+bool hux_ota_wait_due(hux_ota_wait_t *w, uint32_t now_ms, bool busy, bool connected) {
+    if (!w->held) {
+        return false;
+    }
+    if (busy || !connected) {
+        w->idle_since = now_ms;
+        return false;
+    }
+    if (now_ms - w->idle_since < HUX_OTA_IDLE_MS) {
+        return false;
+    }
+    w->held = false;
+    return true;
+}

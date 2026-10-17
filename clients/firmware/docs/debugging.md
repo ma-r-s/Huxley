@@ -297,10 +297,28 @@ still had queued when the connection ended; tones never count as played;
 The server offers an image with `server_event firmware.update {version,
 url, force}`; `url` is relative to the server in use (`/firmware/<v>.bin`
 on the LAN address or the tunnel alike). The walkie refuses below 40 %
-battery unless forced (`app.update_refused why=battery_low`), and while
-it plays or listens; otherwise it downloads with `Authorization: Bearer
+battery, and while it is in use (the lever held, a press or an answer in
+flight, a call, anything in the speaker ring or played in the last
+800 ms, the mic running), unless forced. Such an offer waits on the
+walkie, in RAM (F-0038): `ota.deferred version= why=busy|battery_low
+use=press|call|model_speaking|playing|decoding|just_played|mic pct=
+again= idle_needed_s=120` and `phase: deferred` (the server doesn't count
+it as a failure); while it waits, `ota.waiting version= held_s= idle_s=
+use= pct= updating= connected=` every 10 min says what still blocks it.
+Once the walkie has been idle, connected and at 40 % or more for 2 min
+without a break, at any hour, it logs `ota.ready version= idle_ms=
+held_s= sent=` and sends `phase: ready` (a send that fails waits 2 min
+and asks again); the server decides again from its
+current offer (`firmware.update_sent trigger=idle`, or
+`firmware.update_skipped`), so an offer withdrawn meanwhile is never
+installed. A restart drops the wait (the next hello offers again).
+Otherwise it downloads with `Authorization: Bearer
 <device token>` (https via the CA bundle), checks the image is this
-project and the offered version, and restarts into it, reporting
+project and the offered version, and restarts into it once nothing plays
+or listens for 1.5 s (`ota.restart_waiting why=in_use ring_ms= mic=
+quiet_ms=`, `ota.restart_waited
+ms=`, at most 10 min: a reply or reminder the server started during the
+download isn't cut), reporting
 `client_event firmware.status {version, phase, error}`: `downloading`,
 `verifying`, `rebooting`, or `failed` with `begin|image|download|verify|
 busy|bad_url|battery_low`. The new image boots pending: after its first

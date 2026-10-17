@@ -395,6 +395,72 @@ class TestOfferPolicy:
         await self._hello(svc, link, rollback=rollback, conn_id="c3")
         assert len(link.events("firmware.update")) == 2
 
+    async def test_deferred_then_ready_resends_the_current_offer(self, fwdir: Path) -> None:
+        """F-0038: the walkie defers while in use and says `ready` once idle;
+        the server decides again what to send, and a deferral never counts."""
+        make_image(fwdir, "v2")
+        FirmwareStore(fwdir).write_offer("v2", force=False)
+        link = FakeLink()
+        svc = service(fwdir, link)
+        await self._hello(svc, link)
+        for _ in range(fw.MAX_UPDATE_FAILURES + 1):
+            await svc.on_client_event(
+                "c1", "firmware.status", {"version": "v2", "phase": "deferred", "error": "busy"}
+            )
+        link.sent.clear()
+        with structlog.testing.capture_logs() as logs:
+            await svc.on_client_event(
+                "c1", "firmware.status", {"version": "v2", "phase": "ready", "error": None}
+            )
+        assert len(link.events("firmware.update")) == 1
+        sent = [e for e in logs if e["event"] == "firmware.update_sent"]
+        assert sent[0]["trigger"] == "idle"
+
+    async def test_ready_after_a_withdrawal_sends_nothing(self, fwdir: Path) -> None:
+        """An offer withdrawn (or replaced by the running version) while the
+        walkie waited is not installed from its memory."""
+        make_image(fwdir, "v2")
+        store = FirmwareStore(fwdir)
+        store.write_offer("v2", force=False)
+        link = FakeLink()
+        svc = service(fwdir, link)
+        await self._hello(svc, link)
+        await svc.on_client_event(
+            "c1", "firmware.status", {"version": "v2", "phase": "deferred", "error": "busy"}
+        )
+        store.withdraw_offer()
+        link.sent.clear()
+        with structlog.testing.capture_logs() as logs:
+            await svc.on_client_event(
+                "c1", "firmware.status", {"version": "v2", "phase": "ready", "error": None}
+            )
+        assert link.events("firmware.update") == []
+        skipped = [e for e in logs if e["event"] == "firmware.update_skipped"]
+        assert skipped[0]["reason"] == "no_offer"
+        make_image(fwdir, "v1")
+        store.write_offer("v1", force=False)  # backed out: offer what it runs
+        with structlog.testing.capture_logs() as logs:
+            await svc.on_client_event(
+                "c1", "firmware.status", {"version": "v2", "phase": "ready", "error": None}
+            )
+        assert link.events("firmware.update") == []
+        skipped = [e for e in logs if e["event"] == "firmware.update_skipped"]
+        assert skipped[0]["reason"] == "same_version"
+
+    async def test_ready_from_another_connection_is_ignored(self, fwdir: Path) -> None:
+        make_image(fwdir, "v2")
+        FirmwareStore(fwdir).write_offer("v2", force=False)
+        link = FakeLink()
+        svc = service(fwdir, link)
+        await self._hello(svc, link)
+        link.sent.clear()
+        with structlog.testing.capture_logs() as logs:
+            await svc.on_client_event(
+                "c9", "firmware.status", {"version": "v2", "phase": "ready", "error": None}
+            )
+        assert link.events("firmware.update") == []
+        assert "firmware.ready_ignored" in [e["event"] for e in logs]
+
     async def test_repeated_failures_stop_the_offer(self, fwdir: Path) -> None:
         make_image(fwdir, "v2")
         FirmwareStore(fwdir).write_offer("v2", force=False)
@@ -567,6 +633,7 @@ class TestAcceptDecisions:
         await self._pending_hello(svc, link, "c1", sha)
         with structlog.testing.capture_logs() as logs:
             for phase, error in [
+                ("deferred", "busy"),
                 ("downloading", None),
                 ("verifying", None),
                 ("rebooting", None),
@@ -577,6 +644,7 @@ class TestAcceptDecisions:
                 await self._status(svc, "c1", version="v2", phase=phase, error=error)
         status = [e for e in logs if e["event"] == "firmware.status"]
         assert [e["phase"] for e in status] == [
+            "deferred",
             "downloading",
             "verifying",
             "rebooting",
@@ -584,7 +652,9 @@ class TestAcceptDecisions:
             "selftest",
             "accepted",
         ]
-        assert [e["log_level"] for e in status][3] == "warning"
+        levels = [e["log_level"] for e in status]
+        assert levels[0] == "info"  # deferred is no failure
+        assert levels[4] == "warning"
 
 
 class TestDevCmdResults:

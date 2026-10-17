@@ -732,7 +732,9 @@ static void run_dev_cmd(hux_msg_server_event_t *se) {
 
 /* client_event firmware.status {version, phase, error} (F-0028): from the
  * update task, the verify task or here. Any task. */
-void hux_app_firmware_status(const char *version, const char *phase, const char *error) {
+/* True when it went out (a `ready` lost on a live link must be retried). */
+static bool firmware_status_send(const char *version, const char *phase, const char *error) {
+    bool sent = false;
     cJSON *root = cJSON_CreateObject();
     cJSON *data = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "client_event");
@@ -747,23 +749,88 @@ void hux_app_firmware_status(const char *version, const char *phase, const char 
     cJSON_AddItemToObject(root, "data", data);
     char *json = cJSON_PrintUnformatted(root);
     if (json != NULL) {
-        (void)hux_net_send_text(json, strlen(json));
+        sent = hux_net_send_text(json, strlen(json));
     }
     cJSON_free(json);
     cJSON_Delete(root);
+    return sent;
+}
+
+void hux_app_firmware_status(const char *version, const char *phase, const char *error) {
+    (void)firmware_status_send(version, phase, error);
 }
 
 /* server_event firmware.update {version, url, force}: the url is relative
  * to the server in use (the tunnel or the LAN); never on a low cell. */
 #define UPDATE_MIN_BATTERY_PCT 40
 
+/* F-0038: an offer that finds the walkie in use (or on a low cell) waits on
+ * the walkie, instead of failing until the next hello. The walkie decides
+ * when, the server what: once idle it says `ready` and the server sends
+ * the offer again, from offer.json and every guard, so an offer withdrawn
+ * meanwhile is never installed from memory. Forced offers never wait. */
+static hux_ota_wait_t s_ota_wait;
+static char s_ota_held_version[sizeof(((hux_msg_server_event_t *)0)->version)];
+static uint32_t s_ota_held_at;     /* when this hold began */
+static uint32_t s_ota_wait_logged; /* the last ota.waiting line */
+
+#define STATUS_QUIET_MS 800 /* the speaker silent this long: a gap to play in */
+
+/* What an update must not cut: status_busy's list without its
+ * decoder-not-started term (a walkie whose decoder failed must still be
+ * able to take the update that fixes it), plus the mic itself. The first
+ * that holds, for the log; NULL when none. */
+static const char *ota_in_use_why(void) {
+    if (s_talk_down || s_ptt_held) {
+        return "press";
+    }
+    if (s_mic_continuous) {
+        return "call";
+    }
+    if (s_model_speaking) {
+        return "model_speaking";
+    }
+    if (hux_audio_spk_ring_used() > 0) {
+        return "playing";
+    }
+    if (hux_opus_rx_waiting() > 0) {
+        return "decoding";
+    }
+    if (hux_audio_quiet_ms() < STATUS_QUIET_MS) {
+        return "just_played";
+    }
+    if (hux_audio_mic_is_running()) {
+        return "mic";
+    }
+    return NULL;
+}
+
+static bool ota_battery_low(int *pct) {
+    int mv = 0;
+    return hux_battery_last(&mv, pct) && *pct < UPDATE_MIN_BATTERY_PCT;
+}
+
 static void pull_update(hux_msg_server_event_t *se) {
-    int mv = 0, pct = 0;
-    if (hux_battery_last(&mv, &pct) && pct < UPDATE_MIN_BATTERY_PCT && !se->force) {
-        ESP_LOGW(TAG, "app.update_refused version=%s why=battery_low pct=%d", se->version, pct);
-        hux_app_firmware_status(se->version, "failed", "battery_low");
+    int pct = -1;
+    bool low = !se->force && ota_battery_low(&pct);
+    const char *use = se->force ? NULL : ota_in_use_why();
+    if (low || use != NULL) {
+        const char *why = low ? "battery_low" : "busy";
+        bool again = s_ota_wait.held && strcmp(s_ota_held_version, se->version) == 0;
+        snprintf(s_ota_held_version, sizeof(s_ota_held_version), "%s", se->version);
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        if (!s_ota_wait.held) {
+            s_ota_held_at = now;
+            s_ota_wait_logged = now;
+        }
+        hux_ota_wait_hold(&s_ota_wait, now);
+        ESP_LOGI(TAG, "ota.deferred version=%s why=%s use=%s pct=%d again=%d idle_needed_s=%u",
+                 se->version, why, use != NULL ? use : "-", pct, again,
+                 (unsigned)(HUX_OTA_IDLE_MS / 1000));
+        hux_app_firmware_status(se->version, "deferred", why);
         return;
     }
+    s_ota_wait.held = false; /* this offer is the one going */
     char base[160];
     char url[200];
     hux_net_server_uri(base, sizeof(base));
@@ -774,6 +841,38 @@ static void pull_update(hux_msg_server_event_t *se) {
     }
     ESP_LOGI(TAG, "app.update version=%s url=%s force=%d", se->version, url, se->force);
     hux_ota_pull(url, se->version, se->force, hux_net_device_token());
+}
+
+/* Each loop pass: once idle, connected and charged long enough, ask the
+ * server for the offer again. While held, a line every 10 min says what
+ * still blocks it, so a walkie that never updates shows why. */
+#define OTA_WAIT_LOG_MS (10u * 60u * 1000u)
+
+static void ota_wait_tick(void) {
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t since = s_ota_wait.idle_since;
+    int pct = -1;
+    const char *use = ota_in_use_why();
+    bool low = ota_battery_low(&pct);
+    bool updating = hux_ota_busy();
+    bool connected = s_state == ST_READY;
+    bool held = s_ota_wait.held;
+    if (!hux_ota_wait_due(&s_ota_wait, now, use != NULL || low || updating, connected)) {
+        if (held && now - s_ota_wait_logged >= OTA_WAIT_LOG_MS) {
+            s_ota_wait_logged = now;
+            ESP_LOGI(TAG, "ota.waiting version=%s held_s=%u idle_s=%u use=%s pct=%d updating=%d "
+                     "connected=%d", s_ota_held_version, (unsigned)((now - s_ota_held_at) / 1000),
+                     (unsigned)((now - s_ota_wait.idle_since) / 1000), use != NULL ? use : "-",
+                     pct, updating, connected);
+        }
+        return;
+    }
+    bool sent = firmware_status_send(s_ota_held_version, "ready", NULL);
+    ESP_LOGI(TAG, "ota.ready version=%s idle_ms=%u held_s=%u sent=%d", s_ota_held_version,
+             (unsigned)(now - since), (unsigned)((now - s_ota_held_at) / 1000), sent);
+    if (!sent) {
+        hux_ota_wait_hold(&s_ota_wait, now); /* lost on the way: wait and ask again */
+    }
 }
 
 static void handle_ws_message(hux_app_ws_message_t *msg) {
@@ -1042,7 +1141,6 @@ static void dispatch(hux_app_event_t *ev) {
 /* -- Connection sounds (F-0033) ---------------------------------------
  * The walkie says its connection state on its own: hux_status decides
  * when, this plays them through the decoder like the offline cue. */
-#define STATUS_QUIET_MS 800 /* the speaker silent this long: a gap to play in */
 
 static hux_status_t s_status;
 static atomic_bool s_status_power_on = false; /* console `status poweron` */
@@ -1156,6 +1254,7 @@ static void app_task(void *unused) {
         }
         lever_tick();
         status_tick();
+        ota_wait_tick();
         atomic_fetch_add(&s_app_beats, 1);
     }
 }

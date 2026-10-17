@@ -107,6 +107,14 @@ static esp_err_t validate(const esp_app_desc_t *incoming) {
     return ESP_OK;
 }
 
+#define RESTART_WAIT_MAX_MS (10 * 60 * 1000)
+#define RESTART_QUIET_MS    1500 /* past a gap between two sentences */
+
+static bool restart_would_cut(void) {
+    return hux_audio_spk_ring_used() > 0 || hux_audio_mic_is_running() ||
+           hux_audio_quiet_ms() < RESTART_QUIET_MS;
+}
+
 static void ota_task(void *unused) {
     (void)unused;
     int64_t t0 = esp_timer_get_time();
@@ -155,6 +163,26 @@ static void ota_task(void *unused) {
         ESP_LOGE(TAG, "ota.failed step=finish err=%s", esp_err_to_name(err));
         status(v, "failed", "verify");
         goto done;
+    }
+    /* Never cut what plays or listens: a reminder or a reply the server
+     * started during the download (F-0038). The new image is already set
+     * to boot, so waiting is safe; bounded, so a stream played for hours
+     * can't hold it. A press meanwhile hears "Me estoy actualizando". */
+    int64_t w0 = esp_timer_get_time();
+    bool waited = false;
+    while (!s_force && restart_would_cut() &&
+           (esp_timer_get_time() - w0) / 1000 < RESTART_WAIT_MAX_MS) {
+        if (!waited) {
+            ESP_LOGW(TAG, "ota.restart_waiting why=in_use ring_ms=%u mic=%d quiet_ms=%u",
+                     (unsigned)(hux_audio_spk_ring_used() / 48), hux_audio_mic_is_running(),
+                     (unsigned)hux_audio_quiet_ms());
+            waited = true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+    if (waited) {
+        ESP_LOGW(TAG, "ota.restart_waited ms=%u in_use=%d",
+                 (unsigned)((esp_timer_get_time() - w0) / 1000), restart_would_cut());
     }
     ESP_LOGW(TAG, "ota.done version=%s ms=%u: restarting into it", desc.version,
              (unsigned)((esp_timer_get_time() - t0) / 1000));

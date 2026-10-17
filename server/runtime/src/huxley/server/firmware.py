@@ -900,6 +900,8 @@ class FirmwareService:
             self._on_status(conn_id, data)
             if data.get("phase") == "accepted":
                 await self._on_accepted(conn_id, data)
+            elif data.get("phase") == "ready":
+                await self._on_ready(conn_id)
         elif event == "dev.cmd_result":
             self._on_cmd_result(data)
 
@@ -1048,6 +1050,17 @@ class FirmwareService:
             )
             device.pending = None
         await self._maybe_send_update(device, trigger="accepted")
+
+    async def _on_ready(self, conn_id: str) -> None:
+        """The walkie deferred an update while in use (`deferred`, never
+        counted as a failure) and has now been idle 2 min (F-0038). The
+        offer is decided here again, from offer.json and every guard: a
+        withdrawn or replaced offer is never installed from its memory."""
+        device = self._device_on(conn_id)
+        if device is None:
+            logger.info("firmware.ready_ignored", reason="not_the_device", conn_id=conn_id)
+            return
+        await self._maybe_send_update(device, trigger="idle")
 
     def _count_update_progress(self, device: _Device, version: str, phase: object) -> None:
         """What a status means for the next offers: `downloading` uses up an

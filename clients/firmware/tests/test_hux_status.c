@@ -354,6 +354,31 @@ static void test_lever_late_and_missed_releases_restart(void) {
     HX_ASSERT_EQ(hux_lever_tick(&l, 9600), HUX_LEVER_STOP, "and ends normally");
 }
 
+/* F-0038: an offer refused while in use goes after 2 min of idle. */
+static void test_ota_wait_for_idle(void) {
+    hux_ota_wait_t w = {0};
+    HX_ASSERT_TRUE(!hux_ota_wait_due(&w, 999999, false, true), "nothing held: never due");
+    hux_ota_wait_hold(&w, 1000);
+    HX_ASSERT_TRUE(!hux_ota_wait_due(&w, 1000 + HUX_OTA_IDLE_MS - 1, false, true), "not yet");
+    HX_ASSERT_TRUE(hux_ota_wait_due(&w, 1000 + HUX_OTA_IDLE_MS, false, true), "2 min idle: go");
+    HX_ASSERT_TRUE(!hux_ota_wait_due(&w, 1000 + 2 * HUX_OTA_IDLE_MS, false, true), "only once");
+
+    hux_ota_wait_hold(&w, 0);
+    HX_ASSERT_TRUE(!hux_ota_wait_due(&w, 60 * S, true, true), "a book playing at 1 min");
+    HX_ASSERT_TRUE(!hux_ota_wait_due(&w, 120 * S, false, true), "the 2 min restart from it");
+    HX_ASSERT_TRUE(!hux_ota_wait_due(&w, 130 * S, false, false), "disconnected: restarts too");
+    HX_ASSERT_TRUE(!hux_ota_wait_due(&w, 249 * S, false, true), "119 s after the drop");
+    HX_ASSERT_TRUE(hux_ota_wait_due(&w, 250 * S, false, true), "120 s after it: go");
+
+    hux_ota_wait_hold(&w, 0);
+    hux_ota_wait_hold(&w, 100 * S); /* the offer re-sent at a hello */
+    HX_ASSERT_TRUE(hux_ota_wait_due(&w, 120 * S, false, true), "a re-send keeps the wait");
+
+    hux_ota_wait_hold(&w, 0xFFFF0000u);
+    HX_ASSERT_TRUE(hux_ota_wait_due(&w, 0xFFFF0000u + HUX_OTA_IDLE_MS, false, true),
+                   "across the clock's wrap");
+}
+
 int main(void) {
     HX_RUN(test_power_on_startup_ticks_then_connected);
     HX_RUN(test_a_blip_is_silent);
@@ -376,5 +401,6 @@ int main(void) {
     HX_RUN(test_lever_bounce_is_the_same_press);
     HX_RUN(test_lever_release_commits_after_the_window);
     HX_RUN(test_lever_late_and_missed_releases_restart);
+    HX_RUN(test_ota_wait_for_idle);
     HX_SUMMARY();
 }
