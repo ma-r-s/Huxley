@@ -91,6 +91,7 @@ KEEP_EVENTS = frozenset(
         # Spotify (books, music) and Soloist
         "spotify.ws_state",
         "spotify.auth_state",
+        "spotify.not_logged_in",  # connected, logged out 2+ min: Soloist gave up
         "spotify.unavailable",
         "spotify.start_refused",
         "spotify.book_hours_out",

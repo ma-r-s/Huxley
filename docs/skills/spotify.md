@@ -420,12 +420,22 @@ In short:
      image or the repo).
    - **Linux (production):** the same as `dev/entrypoint.sh`, as a
      systemd user unit next to the server; pair once with `--pair`.
+     (Grandpa's Pi runs the dev container itself, `run.sh` from the
+     deployed checkout.)
+   - Soloist tries one login at start and never again. The entrypoint
+     waits until Spotify answers before starting it (the Pi boots before
+     its network after a power cut), and ends the container on "login
+     failed", so Docker's restart policy tries again 30 s later: after the
+     2026-10-14 power cut it sat logged out for three days.
 3. Add `spotify:` to the persona's `skills` block and restart the server.
 
 ## Logs
 
 `spotify.setup_complete`, `spotify.ws_state` (connected / retrying),
-`spotify.auth_state` (logged in, active), `spotify.playback` (status,
+`spotify.auth_state` (logged in, active; every answer, so "logged out"
+from the start shows too), `spotify.not_logged_in` (a warning: connected
+but logged out 2 minutes, then every 30 minutes; the watch alerts on it),
+`spotify.playback` (status,
 context), `spotify.track`, `spotify.play_requested` (query, the kind asked and
 the kind matched, match, uri, `alternatives`), `spotify.play_last`
 (context and `restart` for a request with no query),

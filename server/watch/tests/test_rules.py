@@ -653,12 +653,31 @@ def test_spotify_logged_out_and_back() -> None:
     lines = flat(BOOT, ws(ago(hours=1), True), auth(ago(minutes=30), False))
     item = rule_spotify(inputs(lines))
     assert item is not None
-    assert item.sentence == "Spotify's player is logged out."
+    assert item.sentence == "Spotify's player has been logged out since 14:30."
+    assert item.chip == "Restart Soloist"
     assert rule_spotify(inputs(flat(lines, auth(ago(minutes=1), True)))) is None
     unpaired = line(
         "spotify.unavailable", ago(minutes=2), skill="spotify", reason="player_not_paired"
     )
     assert rule_spotify(inputs(flat(BOOT, ws(ago(hours=1), True), unpaired))) is not None
+
+
+def test_a_fresh_soloist_logging_in_is_not_an_alert() -> None:
+    # Its first answer after a (re)start says logged out for a second.
+    lines = flat(BOOT, ws(ago(minutes=3), True), auth(ago(minutes=3), False))
+    assert rule_spotify(inputs(lines)) is None
+
+
+def test_the_skills_logged_out_warning_alerts_at_once() -> None:
+    # 2026-10-14 to 10-17: logged out for three days after a power cut,
+    # with nothing in the log; the skill now warns after two minutes.
+    warned = line(
+        "spotify.not_logged_in", ago(minutes=1), level="warning", skill="spotify", for_s=120
+    )
+    lines = flat(BOOT, ws(ago(minutes=4), True), auth(ago(minutes=4), False), warned)
+    item = rule_spotify(inputs(lines))
+    assert item is not None and item.label == "Spotify logged out"
+    assert item.since == ago(minutes=4)  # since the first logged-out answer
 
 
 def test_spotify_setup_failed() -> None:

@@ -606,8 +606,8 @@ Gaps: what a card would need that the server does not log yet (each a candidate 
 
 - **A hung server looks quiet, not down.** Its process is still there and nothing says "alive" when no client is connected. `/health` (T1.43 W1) is the fix; the watcher reads it once `huxley.health_url` is set.
 - **No running commit** at start (`huxley_starting` carries no version), so the page shows only the walkie's firmware version.
-- **Telegram mid-run**: a session revoked or a dropped MTProto connection after setup logs nothing; only a setup failure or a failing call shows it.
-- **Spotify logged out at start**: `spotify.auth_state` is logged only on a change, so a player that is logged out from the first message is seen only when a play is refused (`spotify.unavailable reason=player_not_paired`).
+- **Telegram mid-run**: the call bridge's connection changes are logged now (`telegram.transport.connection_state`, T1.53), but a revoked session after setup still shows only as a failing call, and the watch reads neither.
+- **Spotify logged out at start**: fixed 2026-10-17. `spotify.auth_state` is now logged on every answer (it used to be only on a change, so a player logged out from the first message showed only when a play was refused), and `spotify.not_logged_in` warns after 2 minutes logged out.
 - **`connection_failed` has a structured reason only for a refusal** (`refused=<code>`, T1.43); otherwise quota versus network is read from the traceback. A refused answer can also come as a failed `response.done`: the provider logs it as `session.response_refused via=response_done`, which the watch does not read yet (it reads `session.rx.error code=`).
 - **Battery** (F-0025), **rollback and update probation** (T1.43 W4): no signal yet. (The box's disk the watcher reads itself.)
 ## When something looks wrong

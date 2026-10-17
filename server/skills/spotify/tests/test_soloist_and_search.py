@@ -145,6 +145,48 @@ class TestSoloistClient:
         assert await client.wait_until(lambda s: s.connected, 5.0)
 
 
+class TestLoggedOut:
+    """After the 2026-10-14 power cut Soloist sat logged out for three days
+    and the log said nothing."""
+
+    async def test_a_logged_out_answer_is_logged(
+        self, soloist: tuple[FakeSoloistServer, SoloistClient]
+    ) -> None:
+        fake, client = soloist
+        await _until(fake, lambda: fake.connection is not None)
+        await fake.emit({"type": "auth_state", "logged_in": False, "is_active": False})
+        await fake.emit({"type": "error", "message": "x"})  # a marker after it
+        assert await client.wait_until(lambda s: s.error_count == 1, 2.0)
+        calls = [c for c in client._log.ainfo.call_args_list if c.args[0] == "spotify.auth_state"]  # type: ignore[attr-defined]
+        assert calls and calls[-1].kwargs == {"logged_in": False, "is_active": False}
+
+    async def test_staying_logged_out_warns_once_then_every_nag(
+        self, monkeypatch: pytest.MonkeyPatch, soloist: tuple[FakeSoloistServer, SoloistClient]
+    ) -> None:
+        import huxley_skill_spotify.soloist as mod
+
+        monkeypatch.setattr(mod, "LOGIN_CHECK_S", 0.01)
+        monkeypatch.setattr(mod, "LOGIN_GRACE_S", 0.03)
+        monkeypatch.setattr(mod, "LOGIN_NAG_S", 10.0)
+        _, client = soloist
+        client.state.logged_in = False
+        task = asyncio.create_task(client._watch_login())
+        await asyncio.sleep(0.2)
+        warned = [
+            c for c in client._log.awarning.call_args_list if c.args[0] == "spotify.not_logged_in"
+        ]  # type: ignore[attr-defined]
+        assert len(warned) == 1 and warned[0].kwargs["for_s"] >= 0
+        client.state.logged_in = True  # logged in again: quiet
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        warned = [
+            c for c in client._log.awarning.call_args_list if c.args[0] == "spotify.not_logged_in"
+        ]  # type: ignore[attr-defined]
+        assert len(warned) == 1
+
+
 def test_describe_item_tolerates_shapes() -> None:
     soloist_shape = {
         "uri": "spotify:track:t",

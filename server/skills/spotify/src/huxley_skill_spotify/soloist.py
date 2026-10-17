@@ -37,6 +37,15 @@ if TYPE_CHECKING:
     from huxley_sdk import SkillLogger
 
 
+# Connected but logged out: Soloist tries one login and gives up. After
+# the 2026-10-14 power cut that meant three days of "Spotify no está
+# conectado" with nothing in the log. Checked every LOGIN_CHECK_S; logged
+# out LOGIN_GRACE_S is a warning, repeated every LOGIN_NAG_S.
+LOGIN_CHECK_S = 30.0
+LOGIN_GRACE_S = 120.0
+LOGIN_NAG_S = 1800.0
+
+
 @dataclass
 class PlayerState:
     """What Soloist last told us. `connected` is our socket, not Spotify's."""
@@ -175,13 +184,15 @@ class SoloistClient:
                     await ws.send(json.dumps({"type": "command", "command": "get_auth_state"}))
                     await ws.send(json.dumps({"type": "command", "command": "get_state"}))
                     sender = asyncio.create_task(self._send_loop(ws))
+                    login = asyncio.create_task(self._watch_login())
                     try:
                         async for raw in ws:
                             await self._on_message(raw)
                     finally:
-                        sender.cancel()
-                        with contextlib.suppress(asyncio.CancelledError):
-                            await sender
+                        for task in (sender, login):
+                            task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await task
             except (OSError, TimeoutError, websockets.WebSocketException) as exc:
                 await self._log.awarning(
                     "spotify.ws_state",
@@ -193,6 +204,26 @@ class SoloistClient:
             await self._update(connected=False, is_active=False)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
+
+    async def _watch_login(self) -> None:
+        """While connected: warn when Soloist stays logged out (see
+        LOGIN_GRACE_S); the watch turns the warning into an alert."""
+        out_since: float | None = None
+        warned_at: float | None = None
+        while True:
+            await asyncio.sleep(LOGIN_CHECK_S)
+            if self.state.logged_in:
+                out_since = warned_at = None
+                continue
+            now = time.monotonic()
+            out_since = out_since if out_since is not None else now - LOGIN_CHECK_S
+            if now - out_since < LOGIN_GRACE_S:
+                continue
+            if warned_at is None or now - warned_at >= LOGIN_NAG_S:
+                warned_at = now
+                await self._log.awarning(
+                    "spotify.not_logged_in", for_s=round(now - out_since), url=self._url
+                )
 
     async def _send_loop(self, ws: Any) -> None:
         while True:
@@ -219,6 +250,7 @@ class SoloistClient:
         kind = event.get("type")
         auth_before = (self.state.logged_in, self.state.is_active)
         status_before = self.state.status
+        auth_told = kind == "auth_state"  # logged even unchanged: "logged out" too
         match kind:
             case "auth_state":
                 await self._update(
@@ -256,7 +288,7 @@ class SoloistClient:
                 await self._log.awarning("spotify.soloist_error", message=message[:200])
             case _:
                 await self._log.adebug("spotify.event", type=kind)
-        if (self.state.logged_in, self.state.is_active) != auth_before:
+        if auth_told or (self.state.logged_in, self.state.is_active) != auth_before:
             await self._log.ainfo(
                 "spotify.auth_state",
                 logged_in=self.state.logged_in,

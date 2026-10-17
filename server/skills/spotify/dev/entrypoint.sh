@@ -57,5 +57,26 @@ fi
 tar -xzf "$archive" -C /data/bin
 /data/bin/soloist --version || true
 
-exec /data/bin/soloist -n "$DEVICE_NAME" -k "$SOLOIST_API_KEY" \
-  -D /data/state -C /cache -w 0.0.0.0:9090 -i 100 "$@"
+# Soloist logs a failed login and then sits there logged out: it never
+# tries again. Pass its output through, and on "login failed" end the
+# container: Docker's restart policy brings it back through the wait above.
+out="$XDG_RUNTIME_DIR/soloist.out"
+rm -f "$out"
+mkfifo "$out"
+/data/bin/soloist -n "$DEVICE_NAME" -k "$SOLOIST_API_KEY" \
+  -D /data/state -C /cache -w 0.0.0.0:9090 -i 100 "$@" >"$out" 2>&1 &
+pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null' TERM INT
+while IFS= read -r line; do
+  printf '%s\n' "$line"
+  case "$line" in
+    *"login failed"*)
+      echo "entrypoint: Soloist failed to log in; restarting the container in ${LOGIN_RETRY_S:-30} s" >&2
+      sleep "${LOGIN_RETRY_S:-30}"
+      kill -TERM "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      exit 1
+      ;;
+  esac
+done <"$out"
+wait "$pid"

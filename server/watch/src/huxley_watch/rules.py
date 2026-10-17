@@ -776,6 +776,7 @@ def rule_spotify(i: Inputs) -> Item | None:
         )
     down_since: datetime | None = None
     logged_out: Event | None = None
+    told = False  # a refused request or the skill's warning, not just an answer
     reached = False  # this server process has reached the player at least once
     for e in app:
         if e.name == "spotify.ws_state":
@@ -785,9 +786,14 @@ def rule_spotify(i: Inputs) -> Item | None:
             elif down_since is None:
                 down_since = e.ts
         elif e.name == "spotify.auth_state":
-            logged_out = None if e.get("logged_in") else e
-        elif e.name == "spotify.unavailable" and e.get("reason") == "player_not_paired":
-            logged_out = e
+            if e.get("logged_in"):
+                logged_out, told = None, False
+            else:
+                logged_out = logged_out or e
+        elif e.name in ("spotify.not_logged_in", "spotify.unavailable") and (
+            e.name == "spotify.not_logged_in" or e.get("reason") == "player_not_paired"
+        ):
+            logged_out, told = logged_out or e, True
     # Open, and the server restarted without reaching the player since:
     # still down. Each reboot of a flickering power supply closed it
     # ("Spotify is working again") while Soloist was dead, and reopened it
@@ -809,15 +815,26 @@ def rule_spotify(i: Inputs) -> Item | None:
             "Spotify is working again.",
             down_since,
         )
-    if down_since is None and logged_out is not None:
+    # A logged-out answer is normal for the second a fresh Soloist takes to
+    # log in; a refused request or the skill's own warning is not.
+    if (
+        down_since is None
+        and logged_out is not None
+        and (
+            told
+            or "spotify.down" in i.was_open
+            or i.now - logged_out.ts >= timedelta(minutes=i.th.spotify_down_minutes)
+        )
+    ):
         return Item(
             "spotify.down",
             "Spotify logged out",
             short(i.now - logged_out.ts),
-            "Pair Spotify",
-            "Spotify's player is logged out.",
+            "Restart Soloist",
+            f"Spotify's player has been logged out since {when(logged_out.ts, i.now, i.tz)}.",
             why,
-            "Open Soloist's page on the box and pair the Spotify account again.",
+            "Restart it on the box (docker restart huxley-soloist; it restarts itself after a"
+            " failed login). Still logged out after that: pair the Spotify account again.",
             "Spotify is working again.",
             logged_out.ts,
         )
