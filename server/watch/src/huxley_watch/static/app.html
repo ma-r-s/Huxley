@@ -332,6 +332,7 @@ function turnHTML(it) {
   if (it.him) {
     const flag = !it.heard ? `<span class="flag">Didn't catch it</span>` : "";
     const words = it.him.text ? `<p>${esc(it.him.text)}</p>`
+      : it.him.heard_as ? `<p class="quiet">Not heard clearly (transcribed as &ldquo;${esc(it.him.heard_as)}&rdquo;)</p>`
       : `<p class="quiet">${it.pending ? "Writing down his words&hellip;" : it.heard ? "His words weren't transcribed" : "No words came through"}</p>`;
     h += `<div class="b him${it.heard ? "" : " warn"}">${flag}${words}${foot(it.him.clips, it.bench ? `${it.at} · test` : it.at)}</div>`;
   } else if (it.walkie) {

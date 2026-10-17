@@ -6249,7 +6249,7 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 
 ## T1.54: The phone app as a chat (2026-10-17)
 
-**Status**: `in_progress` (2026-10-17) · **Effort**: M
+**Status**: `done` (2026-10-17, 1520e2ba; live on the Pi at 19:20Z) · **Effort**: M
 
 **Validated**: Mario: to see a conversation he had to scroll the app's Today to the device row, open `/`, tap the hour strip, then scroll to the bottom of a list that didn't update; each exchange was four icon rows (his recording, the raw tool name "play_station station: caracol", the stream, the transcript), "I don't know who said what because I have to remember the icon", "the style of the whole website... badly thought out". Seen on the live app the same day.
 
@@ -6257,4 +6257,7 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 
 **DoD**: opens on the latest with no tap; updates itself; who said what by side and colour; words and recording in one bubble; actions in plain sentences for every tool he has used (39 names in the logs); dark mode; conversations never stored on the phone (`test_the_page_never_keeps_a_days_words` now on /chat/); watch tests green; checked on real days (286 turns on 10-14, 51 items on 10-17) in a silent second instance on the Pi (port 8781, no alert channels, its own state dir).
 
-**Docs**: server/watch/README.md "The phone app" rewritten; web.py's docstring.
+**Docs**: server/watch/README.md "The phone app" rewritten; web.py's docstring. Then, on the live app: a Whisper hallucination ("Subtítulos realizados por la comunidad de Amara.org") showed as his words; the old app's rule applies (talks.garbled): "Not heard clearly (transcribed as ...)", never his words.
+
+**Lesson**: a critic read of the UI caught ten bugs the tests and my own look missed (two needed real-shaped rows: open streams closed at now, his words landing in a drawn turn); also, testing audio in the browser pane played his walkie's reply through Mario's Mac: mute the player before any playback check.
+

@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from huxley_watch.daylist import audio_url
+from huxley_watch.talks import garbled
 
 # His words reach the log up to ~20 s after his release (2026-10-12: 19.3 s
 # at most over 304 presses).
@@ -53,9 +54,15 @@ RESUME_S = 90.0
 class Side:
     text: str = ""
     clips: list[dict[str, Any]] = field(default_factory=list)  # {"audio", "ms"}
+    # His words, when the transcriber made them up ("Subtítulos realizados
+    # por la comunidad de Amara.org"): never shown as what he said.
+    heard_as: str = ""
 
     def json(self) -> dict[str, Any]:
-        return {"text": self.text or None, "clips": self.clips}
+        out: dict[str, Any] = {"text": self.text or None, "clips": self.clips}
+        if self.heard_as:
+            out["heard_as"] = self.heard_as
+        return out
 
 
 @dataclass
@@ -73,7 +80,12 @@ class Turn:
     def json(self, now_t: float | None) -> dict[str, Any]:
         pending = False
         heard = True
-        if self.him is not None and not self.him.text and self.walkie is None:
+        if (
+            self.him is not None
+            and not self.him.text
+            and self.walkie is None
+            and not self.him.heard_as
+        ):
             since = self.released if self.released is not None else self.t
             if now_t is not None and (now_t - since) * 60 < PENDING_S:
                 pending = True  # his words may still come
@@ -269,10 +281,14 @@ def items(rows: list[dict[str, Any]], now_t: float | None = None) -> list[dict[s
                 press = ready[0]
                 waiting.remove(press)
                 assert press.him is not None
-                press.him.text = r["text"]
+                side = press.him
             else:
                 turn = new_turn(r)
-                turn.him = Side(text=r["text"])
+                side = turn.him = Side()
+            if garbled(r["text"]):
+                side.heard_as = r["text"]
+            else:
+                side.text = r["text"]
         elif kind == "tool":
             turn = answer_turn(r)
             turn.actions.append(action(r["text"], r["detail"] or ""))

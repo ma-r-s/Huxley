@@ -221,3 +221,15 @@ def test_a_slow_answer_after_a_filler_stays_in_the_turn() -> None:
     )
     (turn,) = got
     assert turn["walkie"]["text"].endswith("el papa salió del hospital.")
+
+
+def test_made_up_words_are_never_shown_as_his() -> None:
+    # 14:03 on 2026-10-17: Whisper's "Amara.org" line under his press.
+    (turn,) = items(
+        [
+            row("14:03:00", "rec", "mic", audio="g.ogg", ms=1000),
+            row("14:03:02", "say", "him", "Subtítulos realizados por la comunidad de Amara.org"),
+        ]
+    )
+    assert turn["him"]["text"] is None
+    assert turn["him"]["heard_as"].startswith("Subtítulos realizados")
