@@ -6261,3 +6261,13 @@ Behaviour on the walkie (sent to the firmware session; standard practice, Mario 
 
 **Lesson**: a critic read of the UI caught ten bugs the tests and my own look missed (two needed real-shaped rows: open streams closed at now, his words landing in a drawn turn); also, testing audio in the browser pane played his walkie's reply through Mario's Mac: mute the player before any playback check.
 
+## T1.55: A lever click paused his music (2026-10-17)
+
+**Status**: `done` (2026-10-17) · **Effort**: S
+
+**Validated** (firmware session's report, checked): 19:47:08Z a 0.64 s press (peak 0 dBFS clipped, rms -26) was transcribed as Whisper's "Subtítulos realizados por la comunidad de Amara.org" and the model answered "En pausa. Ya no sonará nada por ahora.", pausing what played. 13 such phantom transcripts in his 436 recorded presses since 10-12. The model hears the audio, not the transcript: dropping the phantom text (already shown as "Not heard clearly" in the app, T1.54) can't stop what the model does.
+
+**Measured** (every recorded press 10-12 to 10-17, decoded on the Pi: whole and middle level, the first and last 150 ms cut where the lever clicks): no loudness or length gate separates them. The best (press <= 900 ms, middle peak under -30 dBFS) catches 3 of 13 phantoms and drops 7 presses with real words; today's 14:47 phantom has a middle peak of -11 dBFS (something was audible). Mario's "let's not break it" on the press floor stands.
+
+**Fix**: persona (es/en/fr): a noise, the lever's click or anything not understood never changes what's playing; pause or stop only on a clear "pausa / para / silencio / apaga / ya"; if unsure, "No te escuché bien, ¿me repites?" and leave everything as it is.
+
