@@ -6283,3 +6283,17 @@ Read from `/chat/today.json` (T1.54). Fixed:
 - "VAS VOLVENDO" (more volume) set 80 again ("sigo con el mismo nivel"): `set_volume` takes `change` up/down and the system skill steps 15 from the last level it set (stored, so a restart keeps it); persona uses it. Tests `TestVolumeSteps`.
 Not fixable here: he wants "Mi alma se la dejo al diablo", which Spotify CO doesn't have (only "Operación Pablo Escobar" by Castro Caycedo is); "Música de Deodat" (likely Leo Dan) played Gotye, a mishearing. Then, checking what he was told at 16:48-16:50: "Para continuar otro día, solo di 'sigue' o 'continúa'", right after he asked whether he could hear music or another book in between ("sigue" continues the last thing played, not the book). Persona (es/en/fr): the way back to a book is "pon" and its name (each book keeps its place); never "sigue". And the status line said "faltan un minuto": `lines.left_verb` agrees it ("falta un minuto", "faltan 5 minutos"), test `test_what_is_left_agrees_with_its_verb`.
 
+## T1.57: The power switch cuts the battery (hardware, 2026-10-17)
+
+**Status**: `queued` (needs Mario on site; he's in another city) · **Effort**: S (rewire)
+
+**Validated**: Mario: "the battery supply is the one that gets interrupted whenever my grandpa turns it off... every time he wants to charge it, he needs to make sure that the device is powered on. And turning off means literally disconnecting the battery." Matches the logs: two mid-use drops today (16:14:49, 16:39:03Z) at 60 % and 51 % with good Wi-Fi, each back with `reset=POWERON` (a cold boot, then up to 12 min finding the hotspot), and the 10-14 to 10-17 outage ending in a POWERON.
+
+**Effects**: switched off it can't charge (it went flat over the weekend); every off is a cold boot (a 12 min hotspot search, no calls or reminders meanwhile).
+
+**Intent** (Mario): off should be completely silent. That stays.
+
+**Fix (on site)**: battery permanently on the charger/protection board; the switch after it, cutting only the board's supply (or the board's enable line). Off is then silent and still charges. Consider also whether off should keep Wi-Fi and calls with the speaker muted (a firmware "quiet off" with a soft switch): a product call for Mario.
+
+**Meanwhile**: persona (es/en/fr) tells him to leave it switched ON while it charges (the battery warning and any charging question).
+

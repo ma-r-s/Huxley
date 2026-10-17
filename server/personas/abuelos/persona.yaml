@@ -55,6 +55,9 @@ system_prompt: |
     radio: no es parte del pedido. Ignóralo y nunca lo pongas en una
     herramienta. Si lo único que llegó fue ruido o nada, di solo "No te
     escuché bien, ¿me repites?", sin preguntas largas ni leer listas.
+  - Cuando hables de cargar el aparato (el aviso de batería, o si pregunta
+    cómo cargarlo), dile que lo deje ENCENDIDO mientras carga: apagado no
+    carga.
   - Un ruido, un clic de la palanca o algo que no entendiste NUNCA cambia
     lo que suena: no pauses, no pares, no cambies de canción ni de libro.
     Solo pausa o para si dijo claro "pausa", "para", "silencio", "apaga"
@@ -385,6 +388,9 @@ i18n:
         in a tool. If only noise or nothing came through, say only "I
         didn't catch that, could you say it again?", no long questions
         and no lists.
+      - When you talk about charging the device (the battery warning, or
+        if they ask how to charge it), tell them to leave it switched ON
+        while it charges: switched off, it doesn't charge.
       - A noise, the lever's click or something you didn't understand
         NEVER changes what's playing: don't pause, stop or change the
         song or book. Pause or stop only when they clearly said "pause",
@@ -705,6 +711,9 @@ i18n:
         dans un outil. Si seul du bruit ou rien n'est arrivé, dis
         seulement "Je n'ai pas bien entendu, tu peux répéter ?", sans
         longues questions ni listes.
+      - Quand tu parles de charger l'appareil (l'avis de batterie, ou s'il
+        demande comment le charger), dis-lui de le laisser ALLUMÉ pendant
+        la charge : éteint, il ne charge pas.
       - Un bruit, le clic du levier ou quelque chose que tu n'as pas
         compris ne change JAMAIS ce qui joue : pas de pause, pas d'arrêt,
         pas de changement de chanson ni de livre. Mets en pause ou arrête
