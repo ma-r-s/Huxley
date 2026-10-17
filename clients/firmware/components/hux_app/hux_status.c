@@ -168,3 +168,34 @@ const char *hux_status_offline_name(hux_status_offline_t kind) {
         default:                      return "offline";
     }
 }
+
+hux_lever_action_t hux_lever_press(hux_lever_t *l, uint32_t now_ms) {
+    if (l->release_pending) {
+        l->release_pending = false;
+        /* Inside the window: a bounce, never let go. Past it: a real
+         * release the app only hadn't committed yet. */
+        return now_ms - l->release_at < HUX_LEVER_MERGE_MS ? HUX_LEVER_REBOUND : HUX_LEVER_RESTART;
+    }
+    if (l->down) {
+        return HUX_LEVER_RESTART; /* the release between them was dropped */
+    }
+    l->down = true;
+    return HUX_LEVER_START;
+}
+
+void hux_lever_release(hux_lever_t *l, uint32_t now_ms) {
+    if (!l->down || l->release_pending) {
+        return;
+    }
+    l->release_pending = true;
+    l->release_at = now_ms;
+}
+
+hux_lever_action_t hux_lever_tick(hux_lever_t *l, uint32_t now_ms) {
+    if (!l->release_pending || now_ms - l->release_at < HUX_LEVER_MERGE_MS) {
+        return HUX_LEVER_NONE;
+    }
+    l->release_pending = false;
+    l->down = false;
+    return HUX_LEVER_STOP;
+}

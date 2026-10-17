@@ -45,6 +45,9 @@ typedef struct {
     hux_app_event_kind_t kind;
     union {
         hux_app_ws_message_t ws_message;
+        /* Button events: when hux_button saw the edge (esp_timer ms), so a
+         * held-up app task still sees the real gap between edges. */
+        uint32_t button_at_ms;
     } payload;
 } hux_app_event_t;
 

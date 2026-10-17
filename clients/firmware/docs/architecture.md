@@ -180,6 +180,8 @@ Producers never retain references.
                         │
                         ▼
                    app_task: state.owns_mic? yes -> send ptt_start
+                   (a release sends ptt_stop only after 100 ms up: a
+                    press inside that is the lever bouncing, the same press)
 
   I2S RX (mic_task)
         │ PCM frame (20 ms @ 24 kHz = 960 samples × 2 bytes = 1920 B)

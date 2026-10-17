@@ -59,6 +59,7 @@ static app_state_t s_state = ST_BOOT;
  * `input_mode` on every connect. */
 static bool s_ptt_held = false;          /* a press we acted on (sent ptt_start) */
 static bool s_talk_down = false;         /* the lever is held, acted on or not (F-0033) */
+static hux_lever_t s_lever;               /* the press, bounces merged (F-0040) */
 static bool s_mic_continuous = false;    /* input_mode == skill_continuous */
 static hux_server_state_t s_server_state = HUX_SERVER_STATE_UNKNOWN;
 static bool s_model_speaking = false;      /* server's model_speaking */
@@ -903,6 +904,25 @@ static void handle_ws_message(hux_app_ws_message_t *msg) {
     }
 }
 
+static void ptt_pressed(void) {
+    ESP_LOGI(TAG, "app.ptt.pressed");
+    s_talk_down = true;
+    enter_ptt();
+    /* After the press is handled, never before it: a flag and a wake for
+     * the light's own task (F-0034). */
+    hux_led_press(true, s_ptt_held);
+    /* A fresh reading rides with the press, so "how much battery" is
+     * answered from now (64 ms, on the battery task). */
+    hux_battery_read_now();
+}
+
+static void ptt_released(void) {
+    ESP_LOGI(TAG, "app.ptt.released");
+    s_talk_down = false;
+    leave_ptt();
+    hux_led_press(false, false);
+}
+
 static void dispatch(hux_app_event_t *ev) {
     switch (ev->kind) {
         case HUX_APP_EV_NET_WIFI_UP:
@@ -991,23 +1011,30 @@ static void dispatch(hux_app_event_t *ev) {
             ev->payload.ws_message.data = NULL;
             break;
 
-        case HUX_APP_EV_BUTTON_K2_PRESSED:
-            ESP_LOGI(TAG, "app.ptt.pressed");
-            s_talk_down = true;
-            enter_ptt();
-            /* After the press is handled, never before it: a flag and a
-             * wake for the light's own task (F-0034). */
-            hux_led_press(true, s_ptt_held);
-            /* A fresh reading rides with the press, so "how much battery"
-             * is answered from now (64 ms, on the battery task). */
-            hux_battery_read_now();
+        case HUX_APP_EV_BUTTON_K2_PRESSED: {
+            uint32_t at = ev->payload.button_at_ms;
+            bool was_pending = s_lever.release_pending;
+            uint32_t gap = at - s_lever.release_at;
+            hux_lever_action_t act = hux_lever_press(&s_lever, at);
+            if (act == HUX_LEVER_REBOUND) {
+                /* The lever bounced: the same press goes on (F-0040). */
+                ESP_LOGW(TAG, "app.ptt.rebound gap_ms=%u: the same press", (unsigned)gap);
+                break;
+            }
+            if (act == HUX_LEVER_RESTART) {
+                ESP_LOGW(TAG, "app.ptt.restart why=%s gap_ms=%u",
+                         was_pending ? "late_release" : "missed_release",
+                         was_pending ? (unsigned)gap : 0u);
+                ptt_released();
+            }
+            ptt_pressed();
             break;
+        }
 
         case HUX_APP_EV_BUTTON_K2_RELEASED:
-            ESP_LOGI(TAG, "app.ptt.released");
-            s_talk_down = false;
-            leave_ptt();
-            hux_led_press(false, false);
+            /* Committed HUX_LEVER_MERGE_MS later, in lever_tick, unless the
+             * lever bounces back down first. */
+            hux_lever_release(&s_lever, ev->payload.button_at_ms);
             break;
     }
 }
@@ -1097,6 +1124,13 @@ static void status_tick(void) {
     }
 }
 
+/* A release commits once the lever has stayed up HUX_LEVER_MERGE_MS. */
+static void lever_tick(void) {
+    if (hux_lever_tick(&s_lever, (uint32_t)(esp_timer_get_time() / 1000)) == HUX_LEVER_STOP) {
+        ptt_released();
+    }
+}
+
 static void app_task(void *unused) {
     (void)unused;
     ESP_LOGI(TAG, "app_task started");
@@ -1114,10 +1148,13 @@ static void app_task(void *unused) {
 
     hux_app_event_t ev;
     for (;;) {
-        /* A 1 s timeout so the supervisor sees the loop alive while idle. */
-        if (xQueueReceive(s_event_q, &ev, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        /* A 1 s timeout so the supervisor sees the loop alive while idle;
+         * 10 ms while a release waits to commit. */
+        TickType_t wait = pdMS_TO_TICKS(s_lever.release_pending ? 10 : 1000);
+        if (xQueueReceive(s_event_q, &ev, wait) == pdTRUE) {
             dispatch(&ev);
         }
+        lever_tick();
         status_tick();
         atomic_fetch_add(&s_app_beats, 1);
     }

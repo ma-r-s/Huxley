@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "driver/gpio.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -79,6 +80,7 @@ static void talk_poll(void) {
     bool press = edge == HUX_EDGE_PRESS;
     hux_app_event_t ev = {
         .kind = press ? HUX_APP_EV_BUTTON_K2_PRESSED : HUX_APP_EV_BUTTON_K2_RELEASED,
+        .payload.button_at_ms = (uint32_t)(esp_timer_get_time() / 1000),
     };
     /* On a press, which input it was; on a release, what is still held
      * at that sample (nothing). */

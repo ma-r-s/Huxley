@@ -303,6 +303,57 @@ static void test_offline_kind(void) {
                    "named in the log");
 }
 
+/* T1.53 item 27: a re-press 71 ms after a release cancelled his request. */
+static void test_lever_bounce_is_the_same_press(void) {
+    hux_lever_t l = {0};
+    HX_ASSERT_EQ(hux_lever_press(&l, 1000), HUX_LEVER_START, "a press starts the turn");
+    hux_lever_release(&l, 5000);
+    HX_ASSERT_EQ(hux_lever_tick(&l, 5050), HUX_LEVER_NONE, "not committed at 50 ms");
+    HX_ASSERT_EQ(hux_lever_press(&l, 5071), HUX_LEVER_REBOUND, "71 ms later: the lever bounced");
+    HX_ASSERT_EQ(hux_lever_tick(&l, 5200), HUX_LEVER_NONE, "still held: no commit");
+    hux_lever_release(&l, 6900);
+    HX_ASSERT_EQ(hux_lever_tick(&l, 6999), HUX_LEVER_NONE, "the real release waits too");
+    HX_ASSERT_EQ(hux_lever_tick(&l, 7000), HUX_LEVER_STOP, "then commits, once");
+    HX_ASSERT_EQ(hux_lever_tick(&l, 7010), HUX_LEVER_NONE, "only once");
+    HX_ASSERT_EQ(hux_lever_press(&l, 7150), HUX_LEVER_START, "a press after the window is new");
+}
+
+static void test_lever_release_commits_after_the_window(void) {
+    hux_lever_t l = {0};
+    hux_lever_release(&l, 10);
+    HX_ASSERT_EQ(hux_lever_tick(&l, 500), HUX_LEVER_NONE, "a release with no press: nothing");
+    HX_ASSERT_EQ(hux_lever_press(&l, 1000), HUX_LEVER_START, "start");
+    hux_lever_release(&l, 2000);
+    hux_lever_release(&l, 2050); /* a repeated release keeps the first one's time */
+    HX_ASSERT_EQ(hux_lever_tick(&l, 2100), HUX_LEVER_STOP, "100 ms after the first release");
+    /* Across the uint32 wrap of the ms clock. */
+    hux_lever_t w = {0};
+    HX_ASSERT_EQ(hux_lever_press(&w, 0xFFFFFF00u), HUX_LEVER_START, "start near the wrap");
+    hux_lever_release(&w, 0xFFFFFFC0u);
+    HX_ASSERT_EQ(hux_lever_tick(&w, 0x00000010u), HUX_LEVER_NONE, "80 ms across the wrap");
+    HX_ASSERT_EQ(hux_lever_tick(&w, 0x00000024u), HUX_LEVER_STOP, "100 ms across the wrap");
+}
+
+/* The reviewer's case: the app task held up (a prompt, a dev.cmd), so a
+ * release and a deliberate re-press 300 ms later are handled back to back,
+ * with no tick between them. The edge times say they are two presses. */
+static void test_lever_late_and_missed_releases_restart(void) {
+    hux_lever_t l = {0};
+    HX_ASSERT_EQ(hux_lever_press(&l, 1000), HUX_LEVER_START, "request A");
+    hux_lever_release(&l, 3000);
+    HX_ASSERT_EQ(hux_lever_press(&l, 3300), HUX_LEVER_RESTART,
+                 "300 ms later, no tick between: A ends, B starts");
+    HX_ASSERT_EQ(hux_lever_tick(&l, 3400), HUX_LEVER_NONE, "B is held: nothing pending");
+    hux_lever_release(&l, 5000);
+    HX_ASSERT_EQ(hux_lever_press(&l, 5099), HUX_LEVER_REBOUND, "99 ms: still a bounce");
+    hux_lever_release(&l, 6000);
+    HX_ASSERT_EQ(hux_lever_press(&l, 6100), HUX_LEVER_RESTART, "100 ms: a new press");
+    /* A release edge dropped on a full queue: the next press is a press. */
+    HX_ASSERT_EQ(hux_lever_press(&l, 9000), HUX_LEVER_RESTART, "a missed release restarts");
+    hux_lever_release(&l, 9500);
+    HX_ASSERT_EQ(hux_lever_tick(&l, 9600), HUX_LEVER_STOP, "and ends normally");
+}
+
 int main(void) {
     HX_RUN(test_power_on_startup_ticks_then_connected);
     HX_RUN(test_a_blip_is_silent);
@@ -322,5 +373,8 @@ int main(void) {
     HX_RUN(test_the_schedule_end_is_flagged_once);
     HX_RUN(test_updating_reasons);
     HX_RUN(test_offline_kind);
+    HX_RUN(test_lever_bounce_is_the_same_press);
+    HX_RUN(test_lever_release_commits_after_the_window);
+    HX_RUN(test_lever_late_and_missed_releases_restart);
     HX_SUMMARY();
 }

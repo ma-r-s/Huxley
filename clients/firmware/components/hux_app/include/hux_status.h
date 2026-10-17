@@ -111,6 +111,38 @@ typedef enum {
 hux_status_offline_t hux_status_offline_kind(bool have_ip, bool internet_failed);
 const char *hux_status_offline_name(hux_status_offline_t kind);
 
+/* -- Lever chatter (T1.53 item 27) ------------------------------------
+ * A release commits the request only after HUX_LEVER_MERGE_MS; a press
+ * inside that window is the lever bouncing (after letting go, or while
+ * still held) and continues the same press. Seen live: a re-press 71 ms
+ * after a release interrupted his own committed request (5 of 808 gaps
+ * under 100 ms). The cost: each request commits 100 ms later. */
+
+#define HUX_LEVER_MERGE_MS 100u
+
+typedef struct {
+    bool down;            /* the press as the app treats it (merged) */
+    bool release_pending; /* let go, not yet committed */
+    uint32_t release_at;
+} hux_lever_t;
+
+typedef enum {
+    HUX_LEVER_NONE = 0,
+    HUX_LEVER_START,   /* a new press: start the turn */
+    HUX_LEVER_REBOUND, /* a press inside the window: the same press goes on */
+    HUX_LEVER_STOP,    /* the release committed: end the turn */
+    HUX_LEVER_RESTART, /* a press after a release not yet committed (the app
+                        * was held up past the window) or never seen (a
+                        * dropped edge): end the turn, then start a new one */
+} hux_lever_action_t;
+
+/** `now_ms`: when the edge happened (hux_button's stamp), not when it is
+ * handled: a held-up app task must not merge two real presses. */
+hux_lever_action_t hux_lever_press(hux_lever_t *l, uint32_t now_ms);
+void hux_lever_release(hux_lever_t *l, uint32_t now_ms);
+/** Each loop pass: STOP once a pending release is HUX_LEVER_MERGE_MS old. */
+hux_lever_action_t hux_lever_tick(hux_lever_t *l, uint32_t now_ms);
+
 const char *hux_status_name(hux_status_sound_t sound);
 const char *hux_status_phase_name(hux_status_phase_t phase);
 

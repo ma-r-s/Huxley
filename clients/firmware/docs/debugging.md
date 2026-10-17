@@ -500,6 +500,26 @@ an HTTP answer (the tunnel's 530) or the server closing -> "No tengo
 conexión" (Mario's phone gets that alert). `ws.fail_kind internet|server`
 logs each change of verdict; a hello resets it.
 
+### The lever bouncing (F-0040)
+
+The lever's switch can bounce open and shut again well past the button's
+20 ms debounce: on 2026-10-14 a re-press 71 ms after a release (silent,
+900 ms) interrupted his own request, "Quiero oír últimas noticias", just
+committed (5 of 808 release-to-press gaps in a week were under 100 ms). So a
+release ends the press only after the lever has stayed up 100 ms
+(`hux_lever`, host-tested): a press inside that window is the same press
+going on, logged `app.ptt.rebound gap_ms=` (a warning) with no second
+`app.ptt.pressed` and no interrupt. `button.talk press|release` still logs
+every edge the button saw; `app.ptt.released` (and the `ptt_stop`) comes
+100 ms after the last `button.talk release`. That 100 ms is the cost: each
+answer starts 100 ms later. The window is measured between the button's
+own edge times (carried in the event), so an app task held up by a prompt
+or a `dev.cmd` never merges two real presses: a press after the window
+whose release wasn't committed yet logs `app.ptt.restart why=late_release
+gap_ms=` (the first request ends, the second starts), and a press with no
+release before it (an `edge_dropped` release) logs `app.ptt.restart
+why=missed_release`.
+
 ### Lights under the clear back (F-0034)
 
 The board's 7 WS2812B (GPIO38, RMT with DMA, one buffer for a whole frame so
