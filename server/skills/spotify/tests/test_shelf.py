@@ -339,3 +339,17 @@ def test_the_real_shelf_loads_and_every_entry_is_complete() -> None:
 def test_shelf_book_helper_shape() -> None:
     entry = shelf_book("T", "A", "spotify:show:t", "cuentos", [])
     assert parse_shelf(shelf_data([entry])).books[0].title == "T"
+
+
+@pytest.mark.parametrize(
+    ("amount", "verb"),
+    [
+        ("un minuto", "falta"),
+        ("una hora", "falta"),
+        ("5 minutos", "faltan"),
+        ("2 horas", "faltan"),
+    ],
+)
+def test_what_is_left_agrees_with_its_verb(amount: str, verb: str) -> None:
+    # 2026-10-17 he heard "faltan un minuto para terminar el capítulo".
+    assert lines.left_verb("es", amount) == verb

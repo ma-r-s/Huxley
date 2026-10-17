@@ -152,7 +152,7 @@ _SAY: dict[str, dict[str, str]] = {
         "none_available": "No encontré libros de eso que se puedan escuchar. ¿Busco otro "
         "autor o tema?",
         "no_hours": "Este mes ya no quedan horas para escuchar libros. ¿Pongo la radio?",
-        "status": "Es {title}, de {author}. Va en {chapter}: faltan {chapter_left} para "
+        "status": "Es {title}, de {author}. Va en {chapter}: {left_verb} {chapter_left} para "
         "terminar el capítulo y {book_left} para terminar el libro.",
         "status_plain": "Es {title}{by}.{at}",
         "status_by": ", de {author}",
@@ -281,6 +281,13 @@ def chapter_name(lang: str, name: str) -> str:
     "Va en Track 2", 2026-10-12); those become "el capítulo 2"."""
     m = _TRACK.match(name.strip())
     return _CHAPTER_WORD[_lang(lang)].format(n=m.group(1)) if m else name
+
+
+def left_verb(lang: str, amount: str) -> str:
+    """Spanish agrees the verb with what's left: "falta un minuto", "faltan
+    5 minutos" (he heard "faltan un minuto", 2026-10-17). Other languages'
+    lines don't use it."""
+    return "falta" if amount.startswith(("un ", "una ")) else "faltan"
 
 
 def duration(lang: str, ms: int) -> str:

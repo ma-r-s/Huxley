@@ -1050,6 +1050,7 @@ class SpotifySkill:
                             author=book.author or "?",
                             chapter=chapter,
                             chapter_left=lines.duration(lang, chapter_left),
+                            left_verb=lines.left_verb(lang, lines.duration(lang, chapter_left)),
                             book_left=lines.duration(lang, book_left),
                         ),
                     },
