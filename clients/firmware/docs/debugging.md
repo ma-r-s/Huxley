@@ -606,7 +606,12 @@ frame, with the press's totals (`enq` = frames captured, `tx_ok` =
 sent, `enq_drop` = lost to a full queue). `final_stats` also has
 `rms_dbfs` (loudness of the whole press) and `clipped` (samples at full
 scale): a peak of 0 dBFS alone can't tell one click from a clipped
-question.
+question. Clipping is normal for him and harmless at the 30 dB mic gain:
+checked 2026-10-17 over 755 presses (10-12 to 10-17), 75-90% reach 0 dBFS
+(median about 20 samples), and the presses with over 500 clipped samples
+(worst 7333, rms -8 dBFS) were missing a transcript 3% of the time against
+6% for unclipped ones; their transcripts read right. Loud speech, not a
+fault: don't lower the gain for it.
 
 Over days of real use: `python3 tools/dev.py link [hours]` prints, per half
 hour, the seconds the speaker played, the gaps it played as silence
