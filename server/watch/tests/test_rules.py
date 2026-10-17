@@ -680,6 +680,19 @@ def test_the_skills_logged_out_warning_alerts_at_once() -> None:
     assert item.since == ago(minutes=4)  # since the first logged-out answer
 
 
+def test_logged_out_stays_open_while_soloist_restarts() -> None:
+    # Critic: the restart after a failed login drops the socket for a few
+    # seconds; a cycle in that gap closed the alert, the next reopened it.
+    lines = flat(
+        BOOT,
+        ws(ago(minutes=40), True),
+        auth(ago(minutes=40), False),
+        ws(ago(seconds=5), False),
+    )
+    held = rule_spotify(inputs(lines, was_open=frozenset({"spotify.down"})))
+    assert held is not None and held.label == "Spotify logged out"
+
+
 def test_spotify_setup_failed() -> None:
     failed = line(
         "skill.setup_failed",

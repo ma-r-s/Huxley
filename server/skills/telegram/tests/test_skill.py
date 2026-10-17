@@ -2305,3 +2305,24 @@ async def test_a_call_refused_by_privacy_says_why(tmp_path: Path) -> None:
     out = json.loads((await skill.handle("call_contact", {"name": "julián"})).output)
     assert out["reason"] == "call_refused"
     assert "«Julián Ruiz no recibe llamadas de números que no tiene guardados." in out["then"]
+
+
+@pytest.mark.parametrize(
+    ("who", "said"),
+    [("Mario", "«Terminó la llamada con Mario.»"), (None, "«Terminó la llamada.»")],
+)
+def test_the_hang_up_line_is_fixed(who: str | None, said: str) -> None:
+    # "Informa brevemente" came out as "Solo quería informar que ya no está
+    # conectada" (2026-10-17).
+    skill = TelegramSkill()
+    skill._language = "es"
+    assert said in skill._call_ended_prompt(who)
+
+
+def test_the_answering_line_says_the_name_is_the_callers() -> None:
+    # The persona's "never use names" made the model refuse "Te llama
+    # Mario." twice (2026-10-14, 10-17).
+    skill = TelegramSkill()
+    skill._language = "es"
+    prompt = skill._t("answering", display="Mario")
+    assert "Mario es quien llama, no el usuario" in prompt and "«Te llama Mario.»" in prompt

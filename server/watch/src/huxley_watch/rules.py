@@ -817,8 +817,10 @@ def rule_spotify(i: Inputs) -> Item | None:
         )
     # A logged-out answer is normal for the second a fresh Soloist takes to
     # log in; a refused request or the skill's own warning is not.
+    # Open already: a moment unreachable (the container restarting after a
+    # failed login) doesn't close it ("working again") only to reopen.
     if (
-        down_since is None
+        (down_since is None or "spotify.down" in i.was_open)
         and logged_out is not None
         and (
             told

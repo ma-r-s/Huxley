@@ -29,11 +29,15 @@ pactl set-default-sink huxley_spotify
 # Soloist tried its one login then ("login failed: make sure --api-key is
 # valid") and never again, three days without music (2026-10-14 to 10-17).
 # Wait until Spotify answers before fetching or starting anything.
+# Until Soloist runs, a stop ends the script at once (not after Docker's
+# 10 s); a trapped signal ends a `wait`, never a foreground `sleep`.
+trap 'exit 143' TERM INT
+nap() { sleep "$1" & wait $! || true; }
 tries=0
 until curl -fsS -o /dev/null --max-time 5 https://apresolve.spotify.com/; do
   [ $((tries % 12)) -eq 0 ] && echo "entrypoint: waiting for Spotify to be reachable (${tries}x5 s so far)" >&2
   tries=$((tries + 1))
-  sleep 5
+  nap 5
 done
 [ "$tries" -gt 0 ] && echo "entrypoint: Spotify reachable after $((tries * 5)) s" >&2
 
@@ -58,25 +62,54 @@ tar -xzf "$archive" -C /data/bin
 /data/bin/soloist --version || true
 
 # Soloist logs a failed login and then sits there logged out: it never
-# tries again. Pass its output through, and on "login failed" end the
-# container: Docker's restart policy brings it back through the wait above.
+# tries again. Pass its output through; on "login failed" stop it, then end
+# the container after a pause that doubles with each failure in a row (30 s
+# up to 30 min, counted in /data across restarts, reset by a login), so
+# Docker's restart policy tries again through the wait above without
+# hammering Spotify over a key that will never work. Pairing runs as before.
+case " $* " in
+  *" --pair "*)
+    exec /data/bin/soloist -n "$DEVICE_NAME" -k "$SOLOIST_API_KEY" \
+      -D /data/state -C /cache -w 0.0.0.0:9090 -i 100 "$@"
+    ;;
+esac
+fails_file=/data/login_failures
 out="$XDG_RUNTIME_DIR/soloist.out"
 rm -f "$out"
 mkfifo "$out"
 /data/bin/soloist -n "$DEVICE_NAME" -k "$SOLOIST_API_KEY" \
   -D /data/state -C /cache -w 0.0.0.0:9090 -i 100 "$@" >"$out" 2>&1 &
 pid=$!
+# Held open on fd 3 to the end: what Soloist says while it stops still has
+# a reader (a closed FIFO would kill it with SIGPIPE mid-shutdown).
+exec 3<"$out"
 trap 'kill -TERM "$pid" 2>/dev/null' TERM INT
-while IFS= read -r line; do
+failed=0
+while IFS= read -r line <&3 || [ -n "$line" ]; do
   printf '%s\n' "$line"
   case "$line" in
+    *"logged in"*) rm -f "$fails_file" ;;
     *"login failed"*)
-      echo "entrypoint: Soloist failed to log in; restarting the container in ${LOGIN_RETRY_S:-30} s" >&2
-      sleep "${LOGIN_RETRY_S:-30}"
+      failed=1
       kill -TERM "$pid" 2>/dev/null || true
-      wait "$pid" 2>/dev/null || true
-      exit 1
+      break
       ;;
   esac
-done <"$out"
-wait "$pid"
+  line=
+done
+cat <&3
+status=0
+wait "$pid" || status=$?
+if [ "$failed" -eq 1 ]; then
+  n=$(cat "$fails_file" 2>/dev/null || true)
+  case "$n" in '' | *[!0-9]*) n=0 ;; esac
+  n=$((n + 1))
+  echo "$n" >"$fails_file"
+  pause=$((${LOGIN_RETRY_S:-30} << (n < 7 ? n - 1 : 6)))
+  [ "$pause" -gt 1800 ] && pause=1800
+  echo "entrypoint: Soloist failed to log in ($n in a row); restarting the container in $pause s" >&2
+  trap 'exit 1' TERM INT
+  nap "$pause"
+  exit 1
+fi
+exit "$status"

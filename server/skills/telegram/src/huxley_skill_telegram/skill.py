@@ -494,7 +494,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         # 17 s while the caller heard silence and hung up (2026-10-14).
         "answering": (
             "[Aviso del sistema, no lo dijo el usuario: {display} está llamando; "
-            "la llamada se conecta en cuanto lo digas.] Di en voz alta exactamente "
+            "la llamada se conecta en cuanto lo digas. {display} es quien llama, "
+            "no el usuario: su nombre se dice.] Di en voz alta exactamente "
             "«Te llama {display}.» No llames a ninguna herramienta."
         ),
         "call_no_longer_available": (
@@ -560,7 +561,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "accept_failed": "I tried to answer the call from {display} but the connection failed.",
         "answering": (
             "[System notice, not said by the user: {display} is calling and "
-            'the call connects as soon as you say it.] Say out loud exactly "{display} '
+            "the call connects as soon as you say it. {display} is the caller, "
+            'not the user: their name is said.] Say out loud exactly "{display} '
             "is calling.\" Don't call any tool."
         ),
         "call_no_longer_available": (
@@ -630,8 +632,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "answering": (
             "[Avis du système, l'utilisateur ne l'a pas dit : {display} appelle "
-            "et l'appel se connecte dès que tu l'as dit.] Dis à voix haute exactement "
-            "« {display} t'appelle. » N'appelle aucun outil."
+            "et l'appel se connecte dès que tu l'as dit. {display} est celui qui "
+            "appelle, pas l'utilisateur : son nom se dit.] Dis à voix haute "
+            "exactement « {display} t'appelle. » N'appelle aucun outil."
         ),
         "call_no_longer_available": (
             "L'appel de {name} n'est plus disponible -- la personne a "
@@ -1510,27 +1513,31 @@ class TelegramSkill:
 
         if reason is ClaimEndReason.NATURAL and self._ctx is not None:
             ctx = self._ctx
-            who = contact or self._t("the_caller")
-            prompt = self._call_ended_prompt(who)
+            prompt = self._call_ended_prompt(_spoken_name(contact) if contact else None)
             self._spawn_task(ctx.inject_turn(prompt), name="telegram-claim-end-inject")
-            await self._logger.ainfo("telegram.injecting_call_ended_turn", contact=who)
+            await self._logger.ainfo("telegram.injecting_call_ended_turn", contact=contact)
 
-    def _call_ended_prompt(self, who: str) -> str:
-        """Localized LLM-instruction prompt for 'the peer hung up'."""
+    def _call_ended_prompt(self, who: str | None) -> str:
+        """Localized LLM-instruction prompt for 'the peer hung up'. A fixed
+        line: "Informa brevemente" came out as "La llamada ha terminado.
+        Solo quería informar que ya no está conectada." (2026-10-17)."""
         bucket = _telegram_lang_bucket(self._language)
         if bucket == "es":
+            line = f"Terminó la llamada con {who}." if who else "Terminó la llamada."
             return (
-                f"La llamada con {who} ha terminado porque la otra persona colgó. "
-                "Informa brevemente al usuario que la llamada ha concluido."
+                "[Aviso del sistema: la otra persona colgó.] Di en voz alta exactamente "
+                f"«{line}» No llames a ninguna herramienta."
             )
         if bucket == "fr":
+            line = f"L'appel avec {who} est terminé." if who else "L'appel est terminé."
             return (
-                f"L'appel avec {who} s'est terminé parce que la personne a "
-                "raccroché. Informe brièvement l'utilisateur que l'appel est fini."
+                "[Avis du système : l'autre personne a raccroché.] Dis à voix haute "
+                f"exactement « {line} » N'appelle aucun outil."
             )
+        line = f"The call with {who} has ended." if who else "The call has ended."
         return (
-            f"The call with {who} has ended because the other person hung up. "
-            "Briefly let the user know the call is over."
+            f'[System notice: the other person hung up.] Say out loud exactly "{line}" '
+            "Don't call any tool."
         )
 
     # --- Inbound message callbacks (called by transport) ---

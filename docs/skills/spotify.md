@@ -424,9 +424,13 @@ In short:
      deployed checkout.)
    - Soloist tries one login at start and never again. The entrypoint
      waits until Spotify answers before starting it (the Pi boots before
-     its network after a power cut), and ends the container on "login
-     failed", so Docker's restart policy tries again 30 s later: after the
-     2026-10-14 power cut it sat logged out for three days.
+     its network after a power cut), and on "login failed" stops it and
+     ends the container after a pause that doubles with each failure in a
+     row (30 s to 30 min, counted in `/data/login_failures`, reset by a
+     login), so Docker's restart policy tries again without hammering
+     Spotify over a bad key. Its output passes through a FIFO held open to
+     the end, so its shutdown lines are kept; `--pair` runs as before.
+     After the 2026-10-14 power cut it sat logged out for three days.
 3. Add `spotify:` to the persona's `skills` block and restart the server.
 
 ## Logs

@@ -89,6 +89,7 @@ A morning of real use on the phone produced 88 replies; the failures behind thes
 - **Each request is new.** No anchoring on the last topic (a book request was heard as a volume question); "ponlo", "súbele" and "el otro" do refer back.
 - **Picks from a list.** "El primero", "el segundo", "el último" right after a list mean that item, in the order it was read; no "¿cuál?".
 - **An author's books are what he can hear.** "¿Qué libros (o títulos) tiene <autor>?" goes to `find_books`, not a web search: the web listed eight Castro Caycedo titles, and the one he picked isn't on Spotify (2026-10-14).
+- **Other people's names are said.** The no-names rule is about addressing him; a caller, a message's sender or a contact is named ("Te llama Mario."). The model had refused the call announcement twice under the old wording.
 - **A failure is retried.** Something that failed a while ago is tried again when he asks again; the model never says it doesn't work without calling the tool in that turn ("Spotify no funcionaba antes" kept him on the radio after Spotify was back, 2026-10-17). "Noticias Caracol" is the station, not `get_news`.
 - **A bare title is a book first.** "Quiero oír <título>" without "libro" or "canción" goes to `play_book` when it is a book's title, else `play_music`.
 - **Controls follow what is playing.** "Pausa", "sigue", "ponlo", "siguiente" go to the controls of the last thing put on (book, radio or music). "Sigue con la canción" is resume, not next.
