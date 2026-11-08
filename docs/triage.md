@@ -6300,7 +6300,7 @@ Not fixable here: he wants "Mi alma se la dejo al diablo", which Spotify CO does
 
 ## T1.58: A contact saved with two digits missing (2026-11-08)
 
-**Status**: `done` (commit below) · **Effort**: S
+**Status**: `done` (e770d66a) · **Effort**: S
 
 **Validated**: 15:51 Bogotá, he asked to add a relative with her ten-digit mobile The live transcript had all ten digits; the model called `add_contact` with +57 and only eight (the "00" of "300" gone), the skill saved it (its check was only `+\d{7,15}`), and the model read it back itself, as the persona told it to ("número más, [dígitos uno por uno]"), garbled again ("más siete tres dos..."). A wrong number sounded no worse than a right one, so he couldn't catch it. Three of four independent transcriptions of his clip (live, whisper-1, gpt-4o-mini-transcribe) agree on the ten digits; the stored entry was corrected on the Pi by hand (backup kept next to `contacts.json`) and the server restarted idle.
 
