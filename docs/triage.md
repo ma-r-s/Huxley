@@ -6297,3 +6297,29 @@ Not fixable here: he wants "Mi alma se la dejo al diablo", which Spotify CO does
 
 **Meanwhile**: persona (es/en/fr) tells him to leave it switched ON while it charges (the battery warning and any charging question). The watch's "walkie offline" alert now says why from its last battery reading (within 30 min of going away): with 10 % or more, "most likely switched off" (chip "Switch it on", "it only charges while switched on"); under 10 %, "most likely ran flat" (chip "Charge it"). Missed calls, Telegram messages and reminders already wait for it to come back (reminders within their late window, then "missed" in his next conversation).
 
+
+## T1.58: A contact saved with two digits missing (2026-11-08)
+
+**Status**: `done` (commit below) · **Effort**: S
+
+**Validated**: 15:51 Bogotá, he asked to add a relative with her ten-digit mobile The live transcript had all ten digits; the model called `add_contact` with +57 and only eight (the "00" of "300" gone), the skill saved it (its check was only `+\d{7,15}`), and the model read it back itself, as the persona told it to ("número más, [dígitos uno por uno]"), garbled again ("más siete tres dos..."). A wrong number sounded no worse than a right one, so he couldn't catch it. Three of four independent transcriptions of his clip (live, whisper-1, gpt-4o-mini-transcribe) agree on the ten digits; the stored entry was corrected on the Pi by hand (backup kept next to `contacts.json`) and the server restarted idle.
+
+**Fix**: `add_contact` checks the number against its country's numbering plan (`phonenumbers.is_valid_number`, new dependency); a number that can't exist is refused, nothing is saved, and he hears «No me quedó completo el número de X: escuché ... ¿Me lo dices otra vez, despacio?». On success the confirmation is the skill's say-exactly line built from the stored digits, grouped like `phone_number`: «Guardé a X con el número ... ¿Está bien?». The tool now asks for the digits as he said them (the skill adds the code). Persona: the read-back rule replaced, and the stale "Nunca leas el número guardado de un contacto" removed (`phone_number` reads them since T1.53).
+
+**Critic** (fresh agent, probe of 20,000 numbers): (1) without a "+", eleven digits passed as a foreign number (an extra digit saved as Belgian or Dutch, 1 in 3): digits without "+" are now his country's unless they carry its code; (2) dropping "another country means its prefix" would loop "es de España, 612..." forever: restored in the hint and the persona; (3) the Telegram "they must message you first" note buried the "¿Está bien?": dropped from what he hears, still logged (`telegram.add_contact.resolve_failed`); (4) the success result was ASCII-escaped: fixed; (5) dots weren't stripped and "no me quedó completo" was wrong for an extra digit: only digits and "+" count, the line says "no me quedó bien"; (6) the read-back now says not to call a tool until he answers. Kept `is_valid_number` over the suggested `is_possible_number`: the incident's eight digits pass the length-only check.
+
+**DoD**: a dropped digit is refused with the heard digits in the line, not saved, no file written; an extra digit is refused; no digits asks again without digits; dots and a spoken country code are kept; a foreign number is read back with its code, unescaped, without the note; refused with no default code too; the tool description asks for the digits as said. Telegram suite 173 green, runtime suite, ruff, mypy.
+
+**Docs**: `docs/skills/telegram.md` (add_contact row, validation, read-back); persona comment on `default_country_code`.
+
+**Seen, not fixed**: the same afternoon the model began a Spanish answer with "One moment," in English.
+
+## T1.59: The server box loses power since it was moved (hardware, 2026-10-29)
+
+**Status**: `queued` (physical; Mario on site) · **Effort**: S (supply, plug or UPS)
+
+**Validated**: since Mario moved the Pi on 2026-10-29 its boots end with no shutdown at all: the journal just stops, then it stays dark for minutes (4.5 and 18 min on 10-29) and comes back on its own. 2026-11-02 to 11-08: 20 boots, none ended cleanly, six on 11-08 (five between 00:25 and 01:35). Not heat (it died at 69-71 °C; trips 85 passive, 115 critical), not load (about 2), not the network (the cable link was up to the end), not a hang (the 30 s hardware watchdog would reboot within a minute). The self-powered USB drive logged two write errors on 10-29.
+
+**Effects**: each cut drops the walkie's server for minutes; the watch's alerts run on the same box, so nobody hears about it.
+
+**Fix (on site)**: its own USB-C supply firmly seated, straight into the wall, then a small UPS if cuts continue. `journalctl --list-boots` and the last lines of each boot show whether it is still happening.

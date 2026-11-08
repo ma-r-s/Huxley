@@ -66,6 +66,8 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import phonenumbers
+
 from huxley_sdk import (
     ClaimBusyError,
     ClaimEndReason,
@@ -170,8 +172,9 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         ),
         "add_name_param": "Nombre del contacto en minúsculas (ej. 'nieto').",
         "add_phone_param": (
-            "Número de teléfono en formato internacional, empezando con + "
-            "(ej. +573001234567). Sin espacios ni guiones."
+            "El número tal como lo dijo el usuario: todos los dígitos, en orden, sin "
+            "espacios ni guiones (ej. 3001234567). Si es de otro país, con + y el "
+            "prefijo de ese país (ej. +34612345678 para España)."
         ),
         "remove_contact": (
             "Elimina un contacto de la lista de Telegram. Contactos actuales: {contacts}."
@@ -191,10 +194,10 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "Úsalo cuando el usuario pregunte quiénes están en su lista o quiera ver sus contactos."
         ),
         "country_code_hint": (
-            " Código de país por defecto para esta persona: {cc}. Si el usuario "
-            "da solo dígitos locales (sin prefijo internacional), construye el "
-            "número con {cc} delante y léelo así de vuelta para confirmar. Si el "
-            "usuario menciona explícitamente otro país, usa ese prefijo en su lugar."
+            " Código de país por defecto para esta persona: {cc}. Si el usuario da "
+            "solo los dígitos locales, pásalos tal cual: el sistema pone {cc} y le lee "
+            "el número guardado. Si dice que es de otro país, pon + y el prefijo de "
+            "ese país."
         ),
         "contacts_empty": "(ninguno)",
     },
@@ -225,8 +228,9 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         ),
         "add_name_param": "Contact name in lowercase (e.g. 'grandson').",
         "add_phone_param": (
-            "Phone number in international format, starting with + (e.g. +13145551234). "
-            "No spaces or dashes."
+            "The number as the user said it: every digit, in order, no spaces or "
+            "dashes (e.g. 2025550123). If it's from another country, with + and that "
+            "country's prefix (e.g. +34612345678 for Spain)."
         ),
         "remove_contact": "Remove a contact from the Telegram list. Current contacts: {contacts}.",
         "remove_name_param": "Name (lowercase) of the contact to remove.",
@@ -242,10 +246,10 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "List all saved Telegram contacts. Use when the user asks who is in their contact list."
         ),
         "country_code_hint": (
-            " Default country code for this persona: {cc}. If the user gives "
-            "only local digits (no international prefix), build the number with "
-            "{cc} in front and read it back that way for confirmation. If the "
-            "user explicitly mentions another country, use that prefix instead."
+            " Default country code for this persona: {cc}. If the user gives only "
+            "the local digits, pass them as they are: the system adds {cc} and reads "
+            "the saved number back to them. If they say it's from another country, "
+            "put + and that country's prefix."
         ),
         "contacts_empty": "(none)",
     },
@@ -279,8 +283,9 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
         ),
         "add_name_param": "Nom du contact en minuscules (ex. 'petite-fille').",
         "add_phone_param": (
-            "Numéro de téléphone en format international, commençant par + (ex. +33612345678). "
-            "Sans espaces ni tirets."
+            "Le numéro tel que l'utilisateur l'a dit : tous les chiffres, dans l'ordre, "
+            "sans espaces ni tirets (ex. 612345678). S'il est d'un autre pays, avec + "
+            "et le préfixe de ce pays (ex. +34612345678 pour l'Espagne)."
         ),
         "remove_contact": (
             "Supprime un contact de la liste Telegram. Contacts actuels : {contacts}."
@@ -300,10 +305,10 @@ _TOOL_DESC: dict[str, dict[str, str]] = {
             "demande qui est dans sa liste de contacts."
         ),
         "country_code_hint": (
-            " Code pays par défaut pour ce persona : {cc}. Si l'utilisateur donne "
-            "seulement les chiffres locaux (sans préfixe international), construis "
-            "le numéro avec {cc} devant et relis-le ainsi pour confirmer. Si "
-            "l'utilisateur mentionne explicitement un autre pays, utilise ce préfixe."
+            " Code pays par défaut pour ce persona : {cc}. Si l'utilisateur ne donne "
+            "que les chiffres locaux, passe-les tels quels : le système ajoute {cc} et "
+            "lui relit le numéro enregistré. S'il dit qu'il est d'un autre pays, mets "
+            "+ et le préfixe de ce pays."
         ),
         "contacts_empty": "(aucun)",
     },
@@ -317,6 +322,17 @@ _DIGIT_WORDS: dict[str, tuple[str, ...]] = {
     "en": ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"),
     "fr": ("zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf"),
 }
+
+
+def _real_number(phone: str) -> bool:
+    """A number that can exist: the shape check, then the country's own
+    numbering plan (lengths and prefixes), so a dropped digit is caught."""
+    if not _VALID_PHONE_RE.match(phone):
+        return False
+    try:
+        return phonenumbers.is_valid_number(phonenumbers.parse(phone, None))
+    except phonenumbers.NumberParseException:
+        return False
 
 
 def _spoken_number(phone: str, country_code: str | None, lang: str) -> str:
@@ -508,10 +524,9 @@ _STRINGS: dict[str, dict[str, str]] = {
             "devolverle la llamada."
         ),
         "contacts_none": "(ninguno)",
-        "phone_invalid": (
-            "El numero '{phone}' no tiene formato valido. "
-            "Debe empezar con + y contener solo digitos, por ejemplo +573001234567."
-        ),
+        "contact_saved": "[Aviso del sistema: {name} quedó guardado con este número.] Di en voz alta exactamente «Guardé a {name} con el número {digits}. ¿Está bien?» No llames a ninguna herramienta hasta que responda; si dice que no, pídele el número otra vez y vuelve a llamar a add_contact con el mismo nombre.",
+        "phone_unclear": "[Aviso del sistema: ese número no puede existir (le falta o le sobra un dígito); no se guardó nada.] Di en voz alta exactamente «No me quedó bien el número de {name}: escuché {digits}. ¿Me lo dices otra vez, despacio?» No llames a ninguna herramienta hasta que lo repita.",
+        "phone_unheard": "[Aviso del sistema: no llegó ningún número; no se guardó nada.] Di en voz alta exactamente «No entendí el número de {name}. ¿Me lo dices otra vez, despacio?» No llames a ninguna herramienta hasta que lo repita.",
         "contact_not_found_remove": "No tengo a '{name}' en la lista de contactos.",
         "contact_removed_yaml_note": (
             "Elimine a {name} de la sesion actual, pero este contacto esta en el archivo "
@@ -574,10 +589,9 @@ _STRINGS: dict[str, dict[str, str]] = {
             "because the device wasn't connected; ask if they want to call back."
         ),
         "contacts_none": "(none)",
-        "phone_invalid": (
-            "The number '{phone}' doesn't look valid. "
-            "It must start with + and contain only digits, e.g. +13145551234."
-        ),
+        "contact_saved": '[System notice: {name} is saved with this number.] Say out loud exactly "I saved {name} with the number {digits}. Is that right?" Don\'t call any tool until they answer; if they say no, ask for the number again and call add_contact again with the same name.',
+        "phone_unclear": "[System notice: that number can't exist (a digit missing or extra); nothing was saved.] Say out loud exactly \"I didn't get {name}'s number right: I heard {digits}. Can you say it again, slowly?\" Don't call any tool until they repeat it.",
+        "phone_unheard": "[System notice: no number came through; nothing was saved.] Say out loud exactly \"I didn't catch {name}'s number. Can you say it again, slowly?\" Don't call any tool until they repeat it.",
         "contact_not_found_remove": "I don't have '{name}' in the contacts list.",
         "contact_removed_yaml_note": (
             "Removed {name} for this session, but this contact is in the configuration file "
@@ -646,10 +660,9 @@ _STRINGS: dict[str, dict[str, str]] = {
             "s'il veut rappeler."
         ),
         "contacts_none": "(aucun)",
-        "phone_invalid": (
-            "Le numero '{phone}' ne semble pas valide. "
-            "Il doit commencer par + et ne contenir que des chiffres, ex. +33612345678."
-        ),
+        "contact_saved": "[Avis du système : {name} est enregistré avec ce numéro.] Dis à voix haute exactement « J'ai enregistré {name} avec le numéro {digits}. C'est bien ça ? » N'appelle aucun outil avant qu'il réponde ; s'il dit non, redemande-lui le numéro et rappelle add_contact avec le même nom.",
+        "phone_unclear": "[Avis du système : ce numéro ne peut pas exister (un chiffre manque ou est en trop) ; rien n'a été enregistré.] Dis à voix haute exactement « Je n'ai pas bien eu le numéro de {name} : j'ai entendu {digits}. Tu me le redis, lentement ? » N'appelle aucun outil avant qu'il le répète.",
+        "phone_unheard": "[Avis du système : aucun numéro n'est arrivé ; rien n'a été enregistré.] Dis à voix haute exactement « Je n'ai pas compris le numéro de {name}. Tu me le redis, lentement ? » N'appelle aucun outil avant qu'il le répète.",
         "contact_not_found_remove": "Je n'ai pas '{name}' dans la liste de contacts.",
         "contact_removed_yaml_note": (
             "J'ai supprime {name} pour cette session, mais ce contact est dans le fichier "
@@ -762,9 +775,8 @@ class TelegramSkill:
             ", ".join(sorted(self._contacts)) if self._contacts else td["contacts_empty"]
         )
         # When a persona declares a default country code, surface it in the
-        # add_contact description so the LLM (a) reads back the full
-        # international number including the prefix and (b) doesn't ask the
-        # user to dictate the country code for every local contact.
+        # add_contact description so the LLM passes local digits as said and
+        # doesn't ask the user to dictate the code for every local contact.
         cc_hint = (
             td["country_code_hint"].format(cc=self._default_country_code)
             if self._default_country_code
@@ -1228,30 +1240,36 @@ class TelegramSkill:
         assert self._logger is not None
 
         # Phone normalization with default-country-code defense in depth.
-        # Two ways the LLM (or a manual caller) can construct a malformed
-        # phone, both caught here:
-        #   1) Bare digits with no "+" at all — "3000000076"
-        #   2) "+" plus local-only digits without country code — "+3000000076"
-        # Case 2 is the common LLM failure mode: it knows to prepend "+" but
-        # forgets the persona's country code. The skill prepends the default
-        # country code in BOTH cases when the digits are short enough to be
-        # plausibly local-only (≤ 10 digits total). Numbers ≥ 11 digits are
-        # assumed to already carry a country code and are left as-is, so real
-        # foreign contacts ("+34612345678" Spain) survive intact.
-        phone_normalized = normalize_phone(phone_raw)
-        digits = phone_normalized.lstrip("+")
+        # Only digits and a leading "+" count ("300.123.4567" too). The
+        # model is asked for the digits as said, with "+" only for another
+        # country, so with a persona default:
+        #   1) No "+": the persona's country, unless the digits already carry
+        #      its code ("573000000076"). An extra digit then stays local and
+        #      is refused below instead of passing as some foreign number.
+        #   2) "+" with local-only digits and no code ("+3000000076", the old
+        #      LLM failure mode): <= 10 digits get the code too.
+        #   3) "+" and 11 or more digits: as given ("+34612345678" Spain).
+        had_plus = phone_raw.strip().startswith("+")
+        digits = re.sub(r"\D", "", phone_raw)
         if self._default_country_code:
             cc_digits = self._default_country_code.lstrip("+")
-            if not digits.startswith(cc_digits) and len(digits) <= 10:
-                phone = self._default_country_code + digits
+            as_given = "+" + digits
+            if had_plus:
+                local = not digits.startswith(cc_digits) and len(digits) <= 10
             else:
-                phone = "+" + digits
-        elif not phone_normalized.startswith("+"):
-            phone = "+" + digits
+                local = not (digits.startswith(cc_digits) and _real_number(as_given))
+            phone = self._default_country_code + digits if local else as_given
         else:
-            phone = phone_normalized
-        if not _VALID_PHONE_RE.match(phone):
-            return _error_result(self._t("phone_invalid", phone=phone_raw))
+            phone = "+" + digits
+        lang = _telegram_lang_bucket(self._language)
+        if not _real_number(phone):
+            # A dropped or extra digit (a ten-digit mobile saved with eight,
+            # 2026-11-08, T1.58) is refused here, and he hears what came through.
+            await self._logger.ainfo("telegram.add_contact.unclear", name=name, phone=phone)
+            heard = _spoken_number(phone, self._default_country_code, lang)
+            key = "phone_unclear" if digits else "phone_unheard"
+            then = self._t(key, name=name.title(), digits=heard)
+            return ToolResult(output=json.dumps({"ok": False, "then": then}, ensure_ascii=False))
 
         action = "updated" if name in self._contacts else "added"
         self._contacts[name] = phone
@@ -1260,13 +1278,11 @@ class TelegramSkill:
             _save_contacts_file(self._data_dir, self._json_contacts)
 
         # Attempt immediate resolution for inbound caller recognition — soft-fail.
-        resolve_warning = False
         if self._inbound_enabled and self._transport is not None:
             try:
                 uid = await self._transport.resolve_contact(phone, name=name)
                 self._user_id_to_name[uid] = name
             except Exception:
-                resolve_warning = True
                 await self._logger.awarning(
                     "telegram.add_contact.resolve_failed",
                     name=name,
@@ -1275,14 +1291,21 @@ class TelegramSkill:
                 )
 
         await self._logger.ainfo("telegram.contact_added", name=name, phone=phone, action=action)
-        result: dict[str, Any] = {"ok": True, "action": action, "name": name, "phone": phone}
-        if resolve_warning:
-            result["note"] = (
-                "Informa al usuario que el contacto fue guardado. Menciona que para que las "
-                "llamadas entrantes lo reconozcan, esa persona debe enviarle un mensaje de "
-                "Telegram al menos una vez."
-            )
-        return ToolResult(output=json.dumps(result))
+        result: dict[str, Any] = {
+            "ok": True,
+            "action": action,
+            "name": name,
+            "phone": phone,
+            # The read-back is the saved digits, never the model's retelling.
+            "then": self._t(
+                "contact_saved",
+                name=name.title(),
+                digits=_spoken_number(phone, self._default_country_code, lang),
+            ),
+        }
+        # Not told when Telegram can't resolve them yet (resolve_failed above):
+        # he can't act on it, and it buried the "¿Está bien?" (T1.58).
+        return ToolResult(output=json.dumps(result, ensure_ascii=False))
 
     async def _remove_contact(self, name: str) -> ToolResult:
         assert self._logger is not None

@@ -1826,7 +1826,7 @@ class TestDefaultCountryCode:
     """Persona-level `default_country_code` config — when set, bare digits
     sent to `add_contact` get the persona's country prefix prepended instead
     of just '+'. The LLM is told the default via the tool description so it
-    can read back the full international number for confirmation."""
+    passes local digits as said; the skill reads the saved number back."""
 
     def _cfg(self, default_cc: str | None = "+57") -> dict[str, Any]:
         cfg: dict[str, Any] = {
@@ -1926,6 +1926,133 @@ class TestDefaultCountryCode:
         assert result["phone"] == "+573000000076"
 
     @pytest.mark.asyncio
+    async def test_dropped_digit_is_refused_and_he_hears_it(self, tmp_path: Path) -> None:
+        """T1.58 (2026-11-08): a ten-digit mobile came to the tool as +57
+        with two digits gone and was saved; the read-back was the model's own,
+        garbled too. A number the country can't have is refused, nothing is
+        saved, and the line he hears says what came through."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (
+                await skill.handle("add_contact", {"name": "patricia", "phone": "+57300000007"})
+            ).output
+        )
+        assert result["ok"] is False
+        assert "patricia" not in skill._contacts  # type: ignore[attr-defined]
+        assert not (tmp_path / "contacts.json").exists()
+        assert (
+            "«No me quedó bien el número de Patricia: escuché tres cero cero, "
+            "cero cero cero, cero cero siete. ¿Me lo dices otra vez, despacio?»"
+        ) in result["then"]
+
+    @pytest.mark.asyncio
+    async def test_extra_digit_is_refused_not_saved_as_foreign(self, tmp_path: Path) -> None:
+        """Without a "+" the digits are his country's: eleven of them is a
+        mistake, not some other country's number (the critic's 1 in 3)."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (
+                await skill.handle("add_contact", {"name": "patricia", "phone": "30000000076"})
+            ).output
+        )
+        assert result["ok"] is False
+        assert "patricia" not in skill._contacts  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_dots_and_country_code_as_said_are_kept(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        for said in ("300.000.0076", "57 300 000 0076", "+57 300 000 0076"):
+            result = json.loads(
+                (await skill.handle("add_contact", {"name": "patricia", "phone": said})).output
+            )
+            assert result["phone"] == "+573000000076", said
+
+    @pytest.mark.asyncio
+    async def test_foreign_number_is_read_back_with_its_code(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        out = (
+            await skill.handle("add_contact", {"name": "amiga", "phone": "+34612345678"})
+        ).output
+        assert "Guardé a Amiga" in out  # not escaped: the model reads it as written
+        result = json.loads(out)
+        assert result["phone"] == "+34612345678"
+        assert "tres cuatro seis, uno dos tres, cuatro cinco seis, siete ocho" in result["then"]
+        assert "note" not in result
+
+    @pytest.mark.asyncio
+    async def test_refused_without_a_default_country_code(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg(default_cc=None), tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "patricia", "phone": "300000007"})).output
+        )
+        assert result["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_digits_asks_again_without_digits(self, tmp_path: Path) -> None:
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (await skill.handle("add_contact", {"name": "patricia", "phone": "abc"})).output
+        )
+        assert result["ok"] is False
+        assert (
+            "«No entendí el número de Patricia. ¿Me lo dices otra vez, despacio?»"
+            in result["then"]
+        )
+
+    @pytest.mark.asyncio
+    async def test_saved_number_is_read_back_from_what_was_saved(self, tmp_path: Path) -> None:
+        """The confirmation is the skill's line built from the stored
+        digits, grouped the way he says them, ending in a question."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        result = json.loads(
+            (
+                await skill.handle(
+                    "add_contact", {"name": "patricia gomez", "phone": "300-000-0076"}
+                )
+            ).output
+        )
+        assert result["ok"] is True
+        assert result["phone"] == "+573000000076"
+        assert (
+            "«Guardé a Patricia Gomez con el número tres cero cero, cero cero cero, "
+            "cero cero siete seis. ¿Está bien?»"
+        ) in result["then"]
+
+    @pytest.mark.asyncio
+    async def test_tool_asks_for_the_digits_as_said(self, tmp_path: Path) -> None:
+        """The model passes what he said; it no longer builds or reads back
+        the international number itself."""
+        skill = TelegramSkill(transport_factory=StubTransport)
+        ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
+        await skill.setup(ctx)
+
+        tool = next(t for t in skill.tools if t.name == "add_contact")
+        assert "+57" in tool.description
+        assert "léelo así de vuelta" not in tool.description
+        assert "tal como lo dijo" in tool.parameters["properties"]["phone"]["description"]
+
+    @pytest.mark.asyncio
     async def test_invalid_default_country_code_logs_and_ignores(self, tmp_path: Path) -> None:
         """Malformed default_country_code (no leading +, too many digits, etc.)
         is logged as a warning and falls back to None — the skill keeps working."""
@@ -1937,7 +2064,7 @@ class TestDefaultCountryCode:
     @pytest.mark.asyncio
     async def test_tool_description_advertises_default(self, tmp_path: Path) -> None:
         """The LLM sees the default country code in the add_contact description
-        so it can read back the full international number for confirmation."""
+        so it passes local digits as said instead of asking for the code."""
         skill = TelegramSkill(transport_factory=StubTransport)
         ctx, _ = _build_ctx(self._cfg("+57"), tmp_path)
         await skill.setup(ctx)

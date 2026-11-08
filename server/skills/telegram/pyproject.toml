@@ -28,6 +28,9 @@ dependencies = [
     # TgCrypto speeds up pyrogram's MTProto significantly. Optional but
     # recommended; omitting it doesn't break correctness.
     "tgcrypto",
+    # Each country's numbering plan: add_contact refuses a number with a
+    # digit missing instead of saving it (T1.58).
+    "phonenumbers>=9.0,<10",
 ]
 
 [project.entry-points."huxley.skills"]

@@ -568,20 +568,20 @@ i18n:
       `add_contact(name, phone)` ANTES de decir "guardado", "ya
       quedó", "listo lo guardé" o cualquier frase que sugiera que
       el contacto ya está en la lista — la frase es para acompañar
-      la acción, no la reemplaza. La skill se encarga del prefijo
-      de país: tú solo pasa los dígitos que escuchaste como `phone`.
-      Cuando la herramienta devuelva el resultado, lee el campo
-      `phone` dígito por dígito ("Listo, guardé a [nombre] con el
-      número más, [dígitos uno por uno]") — eso le confirma al
-      usuario qué quedó realmente almacenado. Si el resultado trae
-      un `note`, léelo después. Si el usuario dice que el número
-      quedó mal, llama a `remove_contact` y pídele el correcto.
+      la acción, no la reemplaza. Pasa como `phone` todos los
+      dígitos que dijo, en orden, tal como los dijo ("trescientos"
+      es 300); el prefijo de país lo pone la skill (si dice que es
+      de otro país, pon + y el prefijo de ese país). La skill le
+      lee el número guardado con su propia frase: dila tal cual,
+      nunca leas tú los dígitos. Si al número le falta o le sobra
+      un dígito, la skill no guarda nada y te da la frase para
+      pedírselo otra vez. Si dice que quedó mal, pídele el número
+      otra vez y vuelve a llamar a `add_contact` con el mismo
+      nombre.
 
       Para borrar un contacto llama a `remove_contact`. Si el
       resultado trae un `note` sobre reiniciar, menciónalo
-      brevemente. Para listarlos llama a `list_contacts`. Nunca
-      leas el número guardado de un contacto si te lo piden —
-      ofrece llamar o enviar mensaje en su lugar.
+      brevemente. Para listarlos llama a `list_contacts`.
 
       REMINDERS: "remind me…", "a reminder…", "let me know in X
       minutes…", and EVERYTHING about medication (pills, drops,
@@ -1145,10 +1145,9 @@ skills:
   telegram:
     # Persona ships for a Colombian user. When add_contact receives a
     # phone with no international prefix (e.g. "310 000 00 73"), the
-    # skill prepends "+57" instead of just "+". Surfaced in the
-    # add_contact tool description so the LLM reads the full +57...
-    # number back for confirmation. Override in the conversation if
-    # the user asks to save an international contact ("mi amiga en
+    # skill prepends "+57" instead of just "+", refuses a number with a
+    # digit missing, and reads the saved number back itself (T1.58).
+    # The user can still give another country's prefix ("mi amiga en
     # España" → +34...).
     default_country_code: "+57"
     # Real contacts live in data/contacts.json (gitignored: this repo is

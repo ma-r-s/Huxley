@@ -717,6 +717,7 @@ dependencies = [
     { name = "huxley-sdk" },
     { name = "kurigram" },
     { name = "ntgcalls" },
+    { name = "phonenumbers" },
     { name = "py-tgcalls" },
     { name = "tgcrypto" },
 ]
@@ -733,6 +734,7 @@ requires-dist = [
     { name = "huxley-sdk", editable = "server/sdk" },
     { name = "kurigram", specifier = ">=2.2,<3" },
     { name = "ntgcalls", specifier = ">=2.2.1b2" },
+    { name = "phonenumbers", specifier = ">=9.0,<10" },
     { name = "py-tgcalls", specifier = "==2.2.11" },
     { name = "tgcrypto" },
 ]
@@ -1251,6 +1253,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/86/cf974223287b383b205356381433a030ec8533a22c66418b643f9b8be3de/pedalboard-0.9.22-cp314-cp314-win_amd64.whl", hash = "sha256:a6184457152632bea704bc66995537985139103a6b17569fc1e253b304837ec5", size = 3694044, upload-time = "2026-02-02T18:31:29.824Z" },
     { url = "https://files.pythonhosted.org/packages/ab/50/a01b9334449ff8f90bc1b2c90b81bcf7ead6352151c89b6deb3c3fb7db63/pedalboard-0.9.22-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:493b059de75b557e6b96c72bacf649030d547c4aa162cb6f2f8a30271b2b61aa", size = 2439179, upload-time = "2026-02-02T18:31:31.213Z" },
     { url = "https://files.pythonhosted.org/packages/0c/52/d9d0e67e38323513df2cf952f1395daa78cbdc1f7239d3b045565ffb6f6c/pedalboard-0.9.22-cp314-cp314t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:3516148ec4fa6c35603a8d97cc849c659bc7be77f9b0a6cc7763dba75408578b", size = 4841990, upload-time = "2026-02-02T18:31:33.616Z" },
+]
+
+[[package]]
+name = "phonenumbers"
+version = "9.0.43"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/d5/b3ad857b2cdd09c806436b48d2c9afcdde2673475b1a894f74da0db32e75/phonenumbers-9.0.43.tar.gz", hash = "sha256:d4e508ab800c3e5ce219b14be339deb3d55a0ab81af82fea44749fcabd01e908", size = 2314544, upload-time = "2026-11-06T11:43:26.829Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1b/4c/b33a2189464f0f67215e9c8401cb2931ad3ab3f7c8060929f84fe4970544/phonenumbers-9.0.43-py2.py3-none-any.whl", hash = "sha256:349bc799f15e010e35bd2c7d28149950ae74479cb1e11fb054ed9a95ecb4b437", size = 2596726, upload-time = "2026-11-06T11:43:23.63Z" },
 ]
 
 [[package]]
